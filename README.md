@@ -403,6 +403,7 @@ In inline-reply mode, Claude's response is sent directly as a message in the cha
 | `CLAUDE_COMMAND` | Path to Claude Code CLI | `claude` |
 | `CLAUDE_MODEL` | Model to use | `sonnet` |
 | `CLAUDE_PERMISSION_MODE` | Permission mode for CLI | `acceptEdits` |
+| `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | Skip all permission checks (use with caution) | `false` |
 | `CLAUDE_WORKING_DIR` | Working directory for Claude | current dir |
 | `MAX_CONCURRENT_SESSIONS` | Max parallel sessions | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |

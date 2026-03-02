@@ -48,6 +48,8 @@ def load_config() -> dict[str, str]:
         "timeout": os.getenv("SESSION_TIMEOUT_SECONDS", "300"),
         "owner_id": os.getenv("DISCORD_OWNER_ID", ""),
         "coordination_channel_id": os.getenv("COORDINATION_CHANNEL_ID", ""),
+        "dangerously_skip_permissions": os.getenv("CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS", "").lower()
+        in ("true", "1", "yes"),
     }
 
 
@@ -72,6 +74,7 @@ async def main() -> None:
         permission_mode=config["claude_permission_mode"],
         working_dir=config["claude_working_dir"] or None,
         timeout_seconds=int(config["timeout"]),
+        dangerously_skip_permissions=config["dangerously_skip_permissions"],
     )
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None

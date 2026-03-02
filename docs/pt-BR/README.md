@@ -251,6 +251,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLAUDE_COMMAND` | Caminho para o Claude Code CLI | `claude` |
 | `CLAUDE_MODEL` | Modelo a usar | `sonnet` |
 | `CLAUDE_PERMISSION_MODE` | Modo de permissão do CLI | `acceptEdits` |
+| `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | Pular todas as verificações de permissão (use com cuidado) | `false` |
 | `CLAUDE_WORKING_DIR` | Diretório de trabalho para o Claude | diretório atual |
 | `MAX_CONCURRENT_SESSIONS` | Máximo de sessões paralelas | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Timeout de inatividade da sessão | `300` |

@@ -338,6 +338,7 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 | `CLAUDE_COMMAND` | Claude Code CLI へのパス | `claude` |
 | `CLAUDE_MODEL` | 使用するモデル | `sonnet` |
 | `CLAUDE_PERMISSION_MODE` | CLI のパーミッションモード | `acceptEdits` |
+| `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | 全パーミッションチェックをスキップ（注意して使用） | `false` |
 | `CLAUDE_WORKING_DIR` | Claude の作業ディレクトリ | カレントディレクトリ |
 | `MAX_CONCURRENT_SESSIONS` | 最大並行セッション数 | `3` |
 | `SESSION_TIMEOUT_SECONDS` | セッション非アクティブタイムアウト | `300` |

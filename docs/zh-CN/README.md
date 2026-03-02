@@ -271,6 +271,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLAUDE_COMMAND` | Claude Code CLI 路径 | `claude` |
 | `CLAUDE_MODEL` | 使用的模型 | `sonnet` |
 | `CLAUDE_PERMISSION_MODE` | CLI 权限模式 | `acceptEdits` |
+| `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | 跳过所有权限检查（谨慎使用） | `false` |
 | `CLAUDE_WORKING_DIR` | Claude 的工作目录 | 当前目录 |
 | `MAX_CONCURRENT_SESSIONS` | 最大并发会话数 | `3` |
 | `SESSION_TIMEOUT_SECONDS` | 会话非活动超时 | `300` |

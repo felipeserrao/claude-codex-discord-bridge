@@ -251,6 +251,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLAUDE_COMMAND` | Claude Code CLI 경로 | `claude` |
 | `CLAUDE_MODEL` | 사용할 모델 | `sonnet` |
 | `CLAUDE_PERMISSION_MODE` | CLI 권한 모드 | `acceptEdits` |
+| `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | 모든 권한 검사 건너뛰기 (주의하여 사용) | `false` |
 | `CLAUDE_WORKING_DIR` | Claude 작업 디렉토리 | 현재 디렉토리 |
 | `MAX_CONCURRENT_SESSIONS` | 최대 동시 세션 수 | `3` |
 | `SESSION_TIMEOUT_SECONDS` | 세션 비활성 시간 초과 | `300` |
