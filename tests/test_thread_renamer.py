@@ -118,12 +118,31 @@ class TestSuggestTitleEdgeCases:
 class TestSuggestTitleErrors:
     @pytest.mark.asyncio
     async def test_returns_none_on_timeout(self):
-        proc = _make_proc(b"Title\n")
+        """asyncio.TimeoutError from the task is re-raised by asyncio.wait_for and handled.
 
-        async def _hang(*_args, **_kwargs):
-            raise TimeoutError
+        We raise asyncio.TimeoutError directly from the mock communicate coroutine —
+        the same exception type that asyncio.wait_for raises on a real timeout.
+        In Python 3.10, asyncio.TimeoutError != builtins.TimeoutError, so raising
+        the correct type is essential for testing the right code path.
 
-        proc.communicate = _hang
+        Using real asyncio timing (asyncio.sleep + patched _TIMEOUT_SECONDS) is
+        unreliable on Python 3.10 under pytest-asyncio because the CancelledError
+        propagation path through asyncio.wait_for can bypass our except clause.
+        """
+
+        proc = _make_proc(b"")
+        call_count = 0
+
+        async def _timeout_on_first_call():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # asyncio.wait_for re-raises exceptions from inside the task,
+                # so this is equivalent to a real wait_for timeout firing.
+                raise TimeoutError()
+            return b"", b""
+
+        proc.communicate = _timeout_on_first_call
         with patch("asyncio.create_subprocess_exec", return_value=proc):
             result = await suggest_title("some request")
         assert result is None
@@ -139,12 +158,25 @@ class TestSuggestTitleErrors:
 
     @pytest.mark.asyncio
     async def test_kills_process_on_timeout(self):
-        proc = _make_proc(b"Title\n")
+        """After asyncio.TimeoutError, proc.kill() and cleanup communicate() are called.
 
-        async def _hang(*_args, **_kwargs):
-            raise TimeoutError
+        Raises asyncio.TimeoutError from inside the mock coroutine (the exact type
+        asyncio.wait_for raises on timeout).  The second communicate() call returns
+        normally so lines 56-59 of thread_renamer are all exercised:
+          proc.kill() → await proc.communicate() → logger.warning() → return None
+        """
 
-        proc.communicate = _hang
+        proc = _make_proc(b"")
+        call_count = 0
+
+        async def _timeout_on_first_call():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise TimeoutError()
+            return b"", b""
+
+        proc.communicate = _timeout_on_first_call
         with patch("asyncio.create_subprocess_exec", return_value=proc):
             await suggest_title("some request")
         proc.kill.assert_called_once()
