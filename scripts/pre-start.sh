@@ -36,23 +36,21 @@ send_webhook() {
     fi
 }
 
-# ── Step 1: Pull latest code ──
-echo "[pre-start] Pulling latest code..." >&2
-set +e
-STASHED=0
-if ! git diff --quiet 2>/dev/null; then
-    git stash push -m "pre-start auto-stash" --include-untracked 2>&1
-    STASHED=1
-fi
-git pull --ff-only origin main 2>&1
-PULL_EXIT=$?
-if [ $STASHED -eq 1 ]; then
-    git stash drop 2>&1 || true
-fi
-set -e
+# ── Step 1: Pull latest code (skip in local dev mode) ──
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+LOCAL_CHANGES=$(git status --porcelain 2>/dev/null)
 
-if [ $PULL_EXIT -ne 0 ]; then
-    echo "[pre-start] WARNING: git pull failed (exit $PULL_EXIT), continuing with current code" >&2
+if [ "$CURRENT_BRANCH" != "main" ] || [ -n "$LOCAL_CHANGES" ]; then
+    echo "[pre-start] Local dev mode (branch: $CURRENT_BRANCH) — skipping git pull" >&2
+else
+    echo "[pre-start] Pulling latest code..." >&2
+    set +e
+    git pull --ff-only origin main 2>&1
+    PULL_EXIT=$?
+    set -e
+    if [ $PULL_EXIT -ne 0 ]; then
+        echo "[pre-start] WARNING: git pull failed (exit $PULL_EXIT), continuing with current code" >&2
+    fi
 fi
 
 # ── Step 2: Sync dependencies ──
@@ -61,6 +59,51 @@ echo "[pre-start] Syncing dependencies..." >&2
 
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 echo "[pre-start] Code at: ${COMMIT}" >&2
+
+# ── Step 2b: Install dev worktree import hook ──
+# The hook intercepts claude_discord imports via sys.meta_path and redirects them
+# to ~/.ccdb-dev-worktree when that file exists. Uses sys.meta_path (not sys.path)
+# to override python -m's CWD-first resolution.
+# The hook files are created here so they survive venv recreation (uv sync --reinstall).
+for SITE_PKG in "$CCDB_HOME"/.venv/lib/python*/site-packages; do
+    # Install the import hook module
+    cat > "$SITE_PKG/_ccdb_dev_hook.py" << 'HOOK_EOF'
+"""Dev worktree import hook — redirects claude_discord to ~/.ccdb-dev-worktree."""
+import sys, os, importlib.util
+
+def _install():
+    dev_file = os.path.expanduser("~/.ccdb-dev-worktree")
+    if not os.path.exists(dev_file):
+        return
+    with open(dev_file) as f:
+        worktree = f.read().strip()
+    if not os.path.isdir(os.path.join(worktree, "claude_discord")):
+        return
+    class _Finder:
+        def find_spec(self, fullname, path, target=None):
+            if not (fullname == "claude_discord" or fullname.startswith("claude_discord.")):
+                return None
+            parts = fullname.split(".")
+            pkg = os.path.join(worktree, *parts)
+            if os.path.isdir(pkg):
+                init = os.path.join(pkg, "__init__.py")
+                if os.path.exists(init):
+                    return importlib.util.spec_from_file_location(fullname, init, submodule_search_locations=[pkg])
+            mod = pkg + ".py"
+            if os.path.exists(mod):
+                return importlib.util.spec_from_file_location(fullname, mod)
+            return None
+    sys.meta_path.insert(0, _Finder())
+
+_install()
+HOOK_EOF
+    # Activate the hook via .pth (runs on Python startup, before any user code)
+    echo "import _ccdb_dev_hook" > "$SITE_PKG/_ccdb_dev_hook.pth"
+done
+
+if [ -f "$HOME/.ccdb-dev-worktree" ]; then
+    echo "[pre-start] Dev worktree mode: $(cat "$HOME/.ccdb-dev-worktree")" >&2
+fi
 
 # ── Step 3: Validate imports ──
 echo "[pre-start] Validating imports..." >&2
