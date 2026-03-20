@@ -188,22 +188,40 @@ class ApiServer:
         poll_data = data.get("poll")
         poll_obj = None
         if poll_data:
-            result = self._build_poll(poll_data)
-            if isinstance(result, web.Response):
-                return result
-            poll_obj = result
+            poll_result = self._build_poll(poll_data)
+            if isinstance(poll_result, web.Response):
+                return poll_result
+            poll_obj = poll_result
 
-        fmt = data.get("format", "embed")
+        thread_name = data.get("thread_name")
+        fmt = data.get("format", "text" if thread_name else "embed")
+
+        # Determine target: create a new thread or send directly to channel
+        if thread_name:
+            if not hasattr(raw_channel, "create_thread"):
+                return web.json_response({"error": "Channel does not support threads"}, status=400)
+            thread_result = await raw_channel.create_thread(name=thread_name)  # type: ignore[union-attr]
+            # create_thread may return Thread or ThreadWithMessage depending on discord.py version
+            thread = thread_result.thread if hasattr(thread_result, "thread") else thread_result  # type: ignore[union-attr]
+            target = thread
+        else:
+            target = raw_channel
+            thread = None
+
         if poll_obj:
-            await raw_channel.send(content=message, poll=poll_obj)  # type: ignore[union-attr]
+            await target.send(content=message, poll=poll_obj)  # type: ignore[union-attr]
         elif fmt == "text":
-            await raw_channel.send(message)  # type: ignore[union-attr]
+            await target.send(message)  # type: ignore[union-attr]
         else:
             title = data.get("title")
             embed = self._build_embed(message=message, title=title, color=data.get("color"))
-            await raw_channel.send(embed=embed)  # type: ignore[union-attr]
+            await target.send(embed=embed)  # type: ignore[union-attr]
 
-        return web.json_response({"status": "sent"})
+        result: dict[str, str] = {"status": "sent"}
+        if thread is not None:
+            result["thread_id"] = str(thread.id)  # type: ignore[union-attr]
+            result["thread_name"] = thread.name  # type: ignore[union-attr]
+        return web.json_response(result)
 
     async def schedule(self, request: web.Request) -> web.Response:
         """POST /api/schedule — schedule a notification for later."""
