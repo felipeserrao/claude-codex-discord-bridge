@@ -401,7 +401,7 @@ class TestSpawnSession:
 
     @pytest.mark.asyncio
     async def test_spawn_auto_start_false_skips_run_claude(self) -> None:
-        """When auto_start=False, _run_claude is NOT called."""
+        """When auto_start=False, spawn_session creates the thread but does not run Claude."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
         import discord
@@ -417,11 +417,76 @@ class TestSpawnSession:
 
         mock_run = AsyncMock()
         with patch.object(cog, "_run_claude", new=mock_run):
-            result = await cog.spawn_session(channel, "Just notify", auto_start=False)
+            result = await cog.spawn_session(channel, "Hello", auto_start=False)
 
         assert result is thread
-        thread.send.assert_called_once_with("Just notify")
+        thread.send.assert_called_once_with("Hello")
         mock_run.assert_not_called()
+
+
+class TestFetchSeedContext:
+    """Tests for ClaudeChatCog._fetch_seed_context()."""
+
+    @pytest.mark.asyncio
+    async def test_returns_bot_seed_message_content(self) -> None:
+        """When the first message is from a bot, return its content."""
+        seed_msg = MagicMock()
+        seed_msg.author.bot = True
+        seed_msg.content = "☀️ おはようございます！"
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+
+        async def _fake_history(**kwargs: object) -> list[MagicMock]:
+            yield seed_msg  # type: ignore[misc]
+
+        thread.history = _fake_history
+
+        result = await ClaudeChatCog._fetch_seed_context(thread)
+        assert result == "☀️ おはようございます！"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_non_bot_message(self) -> None:
+        """When the first message is from a human, return None."""
+        seed_msg = MagicMock()
+        seed_msg.author.bot = False
+        seed_msg.content = "Hello"
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+
+        async def _fake_history(**kwargs: object) -> list[MagicMock]:
+            yield seed_msg  # type: ignore[misc]
+
+        thread.history = _fake_history
+
+        result = await ClaudeChatCog._fetch_seed_context(thread)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_empty_thread(self) -> None:
+        """When the thread has no messages, return None."""
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+
+        async def _fake_history(**kwargs: object) -> list[MagicMock]:
+            return
+            yield  # type: ignore[misc]  # make it an async generator
+
+        thread.history = _fake_history
+
+        result = await ClaudeChatCog._fetch_seed_context(thread)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_exception(self) -> None:
+        """On any error, return None gracefully."""
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+        thread.history = MagicMock(side_effect=Exception("API error"))
+
+        result = await ClaudeChatCog._fetch_seed_context(thread)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_spawn_auto_start_true_calls_run_claude(self) -> None:
