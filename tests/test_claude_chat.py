@@ -1131,8 +1131,8 @@ class TestMentionOnlyChannels:
         cog._handle_new_conversation.assert_awaited_once_with(msg)
 
     @pytest.mark.asyncio
-    async def test_thread_under_mention_only_channel_bypasses_mention_check(self) -> None:
-        """Thread replies are always handled (already in an active session)."""
+    async def test_thread_under_mention_only_channel_ignored_without_session(self) -> None:
+        """Threads in mention-only channels are ignored when no session exists."""
         cog = self._make_cog(
             channel_ids={111, 222},
             mention_only_channel_ids={222},
@@ -1145,6 +1145,60 @@ class TestMentionOnlyChannels:
         msg.author.id = 42
         msg.type = discord.MessageType.default
         msg.mentions = []  # no bot mention in thread reply
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 55555
+        thread.parent_id = 222  # parent is mention-only channel
+        msg.channel = thread
+        msg.content = "reply"
+        msg.attachments = []
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_thread_under_mention_only_channel_allowed_with_session(self) -> None:
+        """Threads in mention-only channels proceed when an active session exists."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+        )
+        cog._handle_thread_reply = AsyncMock()
+        # Simulate an existing session record
+        record = MagicMock()
+        record.session_id = "abc-123"
+        cog.repo.get = AsyncMock(return_value=record)
+
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = 42
+        msg.type = discord.MessageType.default
+        msg.mentions = []  # no bot mention
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 55555
+        thread.parent_id = 222  # parent is mention-only channel
+        msg.channel = thread
+        msg.content = "reply"
+        msg.attachments = []
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_thread_under_mention_only_channel_allowed_with_mention(self) -> None:
+        """Threads in mention-only channels proceed when bot is @mentioned."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = 42
+        msg.type = discord.MessageType.default
+        msg.mentions = [cog.bot.user]  # bot is mentioned
         thread = MagicMock(spec=discord.Thread)
         thread.id = 55555
         thread.parent_id = 222  # parent is mention-only channel

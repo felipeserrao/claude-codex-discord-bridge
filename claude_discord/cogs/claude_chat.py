@@ -240,6 +240,17 @@ class ClaudeChatCog(commands.Cog):
 
         # Check if message is in a thread under one of the configured channels
         if is_target_thread:
+            # In threads under mention-only channels, require @mention unless
+            # the bot already has an active session in this thread (i.e. user
+            # properly invoked the bot earlier via @mention in the parent).
+            if (
+                isinstance(message.channel, discord.Thread)
+                and message.channel.parent_id in self._mention_only_channel_ids
+                and self.bot.user not in message.mentions
+            ):
+                record = await self.repo.get(message.channel.id)
+                if record is None or record.session_id is None:
+                    return
             await self._handle_thread_reply(message)
 
     @app_commands.command(name="help", description="Show available commands and how to use the bot")
