@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 import contextlib
+import inspect
 import logging
 import os
 import tempfile
@@ -90,6 +91,13 @@ _BACKEND_CHOICES = [
     app_commands.Choice(name="Claude", value="claude"),
     app_commands.Choice(name="Codex", value="codex"),
 ]
+
+
+async def _resolve_maybe_await(value: object) -> object:
+    """Await *value* when needed, otherwise return it unchanged."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 class ClaudeChatCog(commands.Cog):
@@ -195,10 +203,15 @@ class ClaudeChatCog(commands.Cog):
         get_default_backend = getattr(self._settings_repo, "get_default_backend", None)
         if get_default_backend is not None:
             with contextlib.suppress(TypeError):
-                return await get_default_backend(fallback=self._default_backend)
+                resolved = await _resolve_maybe_await(
+                    get_default_backend(fallback=self._default_backend)
+                )
+                if isinstance(resolved, str):
+                    return normalize_backend(resolved)
+                return self._default_backend
 
-        stored = await self._settings_repo.get(SETTING_DEFAULT_BACKEND)
-        if stored is None:
+        stored = await _resolve_maybe_await(self._settings_repo.get(SETTING_DEFAULT_BACKEND))
+        if stored is None or not isinstance(stored, str):
             return self._default_backend
         try:
             return normalize_backend(stored)
@@ -897,7 +910,11 @@ class ClaudeChatCog(commands.Cog):
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
-        backend = self._get_record_backend(record)
+        backend = (
+            self._get_record_backend(record)
+            if record is not None
+            else await self._get_default_backend()
+        )
         prompt, images = await self._build_prompt_and_images(message)
 
         # When there is no session record, this is the first human reply in a
