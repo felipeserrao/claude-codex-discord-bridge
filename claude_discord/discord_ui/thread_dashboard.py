@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from ..backends import BackendKind, normalize_backend
+
 if TYPE_CHECKING:
     from ..database.inbox_repo import InboxEntry, ThreadInboxRepository
 
@@ -111,6 +113,7 @@ class ThreadStatusDashboard:
         state: ThreadState,
         description: str,
         thread: discord.Thread | discord.TextChannel | None = None,
+        backend: BackendKind | str | None = None,
     ) -> None:
         """Update a thread's state and refresh the dashboard embed.
 
@@ -158,8 +161,9 @@ class ThreadStatusDashboard:
         # Send mention outside the lock to avoid holding it during an HTTP call
         if should_mention and thread is not None:
             try:
+                agent_name = "Codex" if normalize_backend(backend) == "codex" else "Claude"
                 await thread.send(
-                    f"🟡 <@{self._owner_id}> Claude has finished — your reply is needed here."
+                    f"🟡 <@{self._owner_id}> {agent_name} has finished — your reply is needed here."
                 )
             except discord.HTTPException:
                 logger.debug("Failed to send owner mention in thread %d", thread_id, exc_info=True)

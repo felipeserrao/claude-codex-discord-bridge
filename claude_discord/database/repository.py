@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import aiosqlite
 
-from ..backends import BackendKind, DEFAULT_BACKEND, normalize_backend
+from ..backends import DEFAULT_BACKEND, BackendKind, normalize_backend
 
 if TYPE_CHECKING:
     from ..claude.types import RateLimitInfo

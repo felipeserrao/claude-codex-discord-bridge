@@ -11,18 +11,19 @@ Handles the core message flow:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
 import contextlib
+import inspect
 import logging
 import os
 import tempfile
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..backends import BackendKind, DEFAULT_BACKEND, normalize_backend
+from ..backends import DEFAULT_BACKEND, BackendKind, normalize_backend
 from ..claude.rewind import find_session_jsonl, parse_user_turns
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
@@ -92,6 +93,18 @@ _BACKEND_CHOICES = [
 ]
 
 
+def _get_explicit_attr(obj: object, name: str) -> object | None:
+    """Return an explicitly assigned attribute without triggering MagicMock fallback."""
+    return vars(obj).get(name)
+
+
+async def _resolve_maybe_await(value: object) -> object:
+    """Await *value* when it is awaitable, otherwise return it as-is."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
 class ClaudeChatCog(commands.Cog):
     """Cog that handles Claude Code conversations via Discord threads."""
 
@@ -124,7 +137,9 @@ class ClaudeChatCog(commands.Cog):
         if runners is not None:
             for backend, configured_runner in runners.items():
                 self._runners[normalize_backend(backend)] = configured_runner
-        self._default_backend = normalize_backend(default_backend or os.getenv("CCDB_DEFAULT_BACKEND"))
+        self._default_backend = normalize_backend(
+            default_backend or os.getenv("CCDB_DEFAULT_BACKEND")
+        )
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
         # When True, skip channel-ID filtering and accept all guild channels.
@@ -134,7 +149,7 @@ class ClaudeChatCog(commands.Cog):
         if channel_ids is not None:
             self._channel_ids = channel_ids
         else:
-            bid = getattr(bot, "channel_id", None)
+            bid = _get_explicit_attr(bot, "channel_id")
             self._channel_ids: set[int] = {bid} if bid else set()
         # Channels where the bot only responds when explicitly @mentioned.
         # Thread replies are not affected (already in an active session).
@@ -143,7 +158,8 @@ class ClaudeChatCog(commands.Cog):
         self._inline_reply_channel_ids: set[int] = inline_reply_channel_ids or set()
         # Channels where only text responses are shown (no tool embeds, thinking, etc.).
         self._chat_only_channel_ids: set[int] = chat_only_channel_ids or set()
-        self._registry = registry or getattr(bot, "session_registry", None)
+        bot_registry = _get_explicit_attr(bot, "session_registry")
+        self._registry = registry or bot_registry
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, AgentRunner] = {}
         # Tracks the asyncio.Task running _run_claude for each thread.
@@ -153,13 +169,13 @@ class ClaudeChatCog(commands.Cog):
         # Dashboard may be None until bot is ready; resolved lazily in _get_dashboard()
         self._dashboard = dashboard
         # For AskUserQuestion persistence across restarts
-        self._ask_repo = ask_repo or getattr(bot, "ask_repo", None)
+        self._ask_repo = ask_repo or _get_explicit_attr(bot, "ask_repo")
         # AI Lounge repo (optional — lounge disabled when None)
-        self._lounge_repo = lounge_repo or getattr(bot, "lounge_repo", None)
+        self._lounge_repo = lounge_repo or _get_explicit_attr(bot, "lounge_repo")
         # Pending resume repo (optional — startup resume disabled when None)
-        self._resume_repo = resume_repo or getattr(bot, "resume_repo", None)
+        self._resume_repo = resume_repo or _get_explicit_attr(bot, "resume_repo")
         # Settings repo for dynamic model lookup (optional — falls back to runner.model)
-        self._settings_repo = settings_repo or getattr(bot, "settings_repo", None)
+        self._settings_repo = settings_repo or _get_explicit_attr(bot, "settings_repo")
         # When True, rename the thread after creation using a claude -p title suggestion
         self._auto_rename_threads = auto_rename_threads
 
@@ -176,7 +192,7 @@ class ClaudeChatCog(commands.Cog):
     def _get_dashboard(self) -> ThreadStatusDashboard | None:
         """Return the dashboard, resolving it from the bot if not yet set."""
         if self._dashboard is None:
-            self._dashboard = getattr(self.bot, "thread_dashboard", None)
+            self._dashboard = _get_explicit_attr(self.bot, "thread_dashboard")
         return self._dashboard
 
     def _get_runner_for_backend(self, backend: BackendKind | str | None) -> AgentRunner:
@@ -195,9 +211,12 @@ class ClaudeChatCog(commands.Cog):
         get_default_backend = getattr(self._settings_repo, "get_default_backend", None)
         if get_default_backend is not None:
             with contextlib.suppress(TypeError):
-                return await get_default_backend(fallback=self._default_backend)
+                resolved = await _resolve_maybe_await(
+                    get_default_backend(fallback=self._default_backend)
+                )
+                return normalize_backend(resolved if isinstance(resolved, str) else None)
 
-        stored = await self._settings_repo.get(SETTING_DEFAULT_BACKEND)
+        stored = await _resolve_maybe_await(self._settings_repo.get(SETTING_DEFAULT_BACKEND))
         if stored is None:
             return self._default_backend
         try:
@@ -773,7 +792,7 @@ class ClaudeChatCog(commands.Cog):
         for thread_id in list(self._active_runners):
             try:
                 session_id: str | None = None
-                record = await self.repo.get(thread_id)
+                record = await _resolve_maybe_await(self.repo.get(thread_id))
                 if record is not None:
                     session_id = record.session_id
 
@@ -828,7 +847,7 @@ class ClaudeChatCog(commands.Cog):
             await self._resume_repo.delete(entry.id)
 
             thread_id = entry.thread_id
-            record = await self.repo.get(thread_id)
+            record = await _resolve_maybe_await(self.repo.get(thread_id))
             backend = self._get_record_backend(record)
             session_id = entry.session_id or (record.session_id if record is not None else None)
             try:
@@ -1028,6 +1047,7 @@ class ClaudeChatCog(commands.Cog):
                     ThreadState.PROCESSING,
                     description,
                     thread=thread,
+                    backend=backend,
                 )
 
             base_runner = self._get_runner_for_backend(backend)
@@ -1036,9 +1056,15 @@ class ClaudeChatCog(commands.Cog):
 
             async def _notify_stall() -> None:
                 threshold = status._stall_hard
+                backend_label = "Codex" if backend == "codex" else "Claude"
+                reason_hint = (
+                    "could be extended reasoning or CLI handoff."
+                    if backend == "codex"
+                    else "could be extended thinking or context compression."
+                )
                 await thread.send(
-                    f"-# \u26a0\ufe0f No activity for {threshold}s — could be extended thinking "
-                    "or context compression. Will resume automatically."
+                    f"-# \u26a0\ufe0f No {backend_label} activity for {threshold}s — "
+                    f"{reason_hint} Will resume automatically."
                 )
 
             status = StatusManager(

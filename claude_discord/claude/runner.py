@@ -140,15 +140,28 @@ class ClaudeRunner:
         #  2. Respond to permission_request / elicitation / plan_approval events
         stdin_mode = asyncio.subprocess.PIPE
 
-        self._process = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=stdin_mode,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-            env=env,
-            limit=10 * 1024 * 1024,  # 10MB — stream-json lines can be large
-        )
+        try:
+            self._process = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=stdin_mode,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+                limit=10 * 1024 * 1024,  # 10MB — stream-json lines can be large
+            )
+        except FileNotFoundError:
+            logger.exception("Claude CLI command not found: %s", self.command)
+            yield StreamEvent(
+                raw={},
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                error=(
+                    f"Claude CLI command not found: {self.command}. "
+                    "Set CLAUDE_COMMAND to the installed executable path or install the Claude CLI."
+                ),
+            )
+            return
 
         logger.info("Claude CLI started: pid=%s", self._process.pid)
 

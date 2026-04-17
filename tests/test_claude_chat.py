@@ -1725,6 +1725,7 @@ class TestAutoRenameThreads:
             runner=runner,
             channel_ids={111},
             auto_rename_threads=auto_rename,
+            default_backend="claude",
         )
 
     def _make_channel_message(self, content: str = "Fix the auth bug") -> MagicMock:

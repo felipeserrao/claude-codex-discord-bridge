@@ -210,8 +210,6 @@ class CodexRunner:
     ) -> list[str]:
         """Build command-line arguments for the Codex CLI."""
         args = [self.command, "exec"]
-        if session_id:
-            args.append("resume")
 
         args.extend(
             [
@@ -237,6 +235,11 @@ class CodexRunner:
 
         for image_path in image_paths or []:
             args.extend(["--image", image_path])
+
+        if session_id:
+            # ``resume`` is a subcommand of ``codex exec``, so ``exec``-level
+            # flags like ``--cd`` must appear before the subcommand.
+            args.append("resume")
 
         # Prompt is sent via stdin using the "-" sentinel so user text never
         # becomes part of option parsing.
@@ -308,6 +311,7 @@ class CodexRunner:
 
         saw_terminal = False
         last_error: str | None = None
+        last_assistant_text: str | None = None
 
         while True:
             line = await asyncio.wait_for(
@@ -337,6 +341,11 @@ class CodexRunner:
 
                 if event_type == "error":
                     last_error = payload.get("message") or last_error
+                    continue
+
+                extracted_text = self._extract_assistant_text(payload)
+                if extracted_text:
+                    last_assistant_text = extracted_text
                     continue
 
                 if event_type == "turn.failed":
@@ -380,6 +389,15 @@ class CodexRunner:
             )
             return
 
+        if last_assistant_text is not None:
+            yield StreamEvent(
+                raw={},
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                text=last_assistant_text,
+            )
+            return
+
         yield StreamEvent(
             raw={},
             message_type=MessageType.RESULT,
@@ -392,6 +410,83 @@ class CodexRunner:
         with contextlib.suppress(OSError):
             text = output_path.read_text(encoding="utf-8").strip()
             return text or None
+        return None
+
+    def _extract_assistant_text(self, payload: dict) -> str | None:
+        """Best-effort fallback extraction for final assistant text from Codex JSON events."""
+        event_type = payload.get("type")
+        if event_type in {"thread.started", "turn.started", "turn.failed", "error"}:
+            return None
+
+        candidates = [
+            payload.get("text"),
+            payload.get("message"),
+        ]
+
+        item = payload.get("item")
+        if isinstance(item, dict):
+            candidates.extend(
+                [
+                    item.get("text"),
+                    item.get("content"),
+                ]
+            )
+
+        message = payload.get("message")
+        if isinstance(message, dict):
+            candidates.extend(
+                [
+                    message.get("content"),
+                    message.get("text"),
+                ]
+            )
+
+        data = payload.get("data")
+        if isinstance(data, dict):
+            candidates.extend(
+                [
+                    data.get("text"),
+                    data.get("message"),
+                    data.get("content"),
+                ]
+            )
+
+        response = payload.get("response")
+        if isinstance(response, dict):
+            candidates.extend(
+                [
+                    response.get("text"),
+                    response.get("output_text"),
+                    response.get("content"),
+                ]
+            )
+
+        for candidate in candidates:
+            extracted = self._coerce_text(candidate)
+            if extracted:
+                return extracted
+        return None
+
+    def _coerce_text(self, value: object) -> str | None:
+        """Convert nested Codex event payload structures into plain text."""
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+
+        if isinstance(value, list):
+            parts = [part for item in value if (part := self._coerce_text(item))]
+            if parts:
+                return "\n".join(parts)
+            return None
+
+        if isinstance(value, dict):
+            if value.get("role") not in (None, "assistant"):
+                return None
+
+            for key in ("text", "message", "output_text", "content"):
+                extracted = self._coerce_text(value.get(key))
+                if extracted:
+                    return extracted
         return None
 
     async def _cleanup(self) -> None:

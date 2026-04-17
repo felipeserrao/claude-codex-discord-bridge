@@ -6,13 +6,13 @@ New Cogs added to ccdb are automatically included — no consumer code changes n
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .backends import BackendKind, DEFAULT_BACKEND, normalize_backend
+from .backends import DEFAULT_BACKEND, BackendKind, normalize_backend
 
 if TYPE_CHECKING:
     from discord.ext.commands import Bot
@@ -146,11 +146,11 @@ async def setup_bridge(
     Returns:
         BridgeComponents with references to initialized repositories.
     """
+    from .codex.runner import CodexRunner
     from .cogs.claude_chat import ClaudeChatCog
     from .cogs.scheduler import SchedulerCog
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
-    from .codex.runner import CodexRunner
     from .database.ask_repo import PendingAskRepository
     from .database.inbox_repo import ThreadInboxRepository
     from .database.lounge_repo import LoungeRepository

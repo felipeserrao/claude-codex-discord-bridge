@@ -305,6 +305,7 @@ async def test_setup_bridge_configures_default_backend_and_runner_registry(
     bot = _make_bot()
     runner = _make_runner()
     monkeypatch.setenv("CCDB_DEFAULT_BACKEND", "codex")
+    monkeypatch.delenv("CODEX_COMMAND", raising=False)
 
     await setup_bridge(
         bot,

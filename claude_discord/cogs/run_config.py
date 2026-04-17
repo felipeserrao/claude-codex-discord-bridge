@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from ..backends import BackendKind, DEFAULT_BACKEND
+from ..backends import DEFAULT_BACKEND, BackendKind
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository

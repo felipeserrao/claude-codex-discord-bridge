@@ -277,7 +277,9 @@ class EventProcessor:
         # Guard: post session_start_embed only once (Claude can emit multiple SYSTEM events).
         # Skip in chat_only mode — no session start embed.
         if not self._chat_only and not self._config.session_id and not self._session_start_sent:
-            await self._config.thread.send(embed=session_start_embed(self._state.session_id))
+            await self._config.thread.send(
+                embed=session_start_embed(self._state.session_id, backend=self._config.backend)
+            )
             self._session_start_sent = True
 
     async def _on_assistant(self, event: StreamEvent) -> None:

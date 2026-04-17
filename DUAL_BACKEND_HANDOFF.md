@@ -272,6 +272,149 @@ Reason:
 
 - this workspace did not have `uv`, `pytest`, or `ruff` available
 
+## Machine Setup Status (2026-04-15 to 2026-04-16)
+
+An isolated second bot instance was also stood up on the target machine for
+real Discord testing of the Codex path.
+
+Created:
+
+- env file: `.env.test-codex`
+- systemd unit: `discord-bot-test-codex.service`
+- helper script: `setup_test_codex_bot.sh`
+
+Current test-instance shape:
+
+- separate Discord bot token
+- separate systemd service name
+- separate clone/workdir: `/home/ubuntu/claude-codex-discord-bridge`
+- separate runtime DB/data under this clone's `data/`
+- default backend set to `codex`
+- mention-only behavior enabled for the configured test channel
+
+Important runtime fixes made during setup:
+
+- pinned `CCDB_UV_BIN=/home/ubuntu/.local/bin/uv` so `pre-start.sh` works under
+  systemd
+- `NotificationRepository.init_db()` now creates the parent directory before
+  opening SQLite, fixing `sqlite3.OperationalError: unable to open database file`
+- `scripts/cleanup_worktrees.sh` no longer hardcodes `/home/ebi/...`; it now
+  derives the repo root dynamically from the script location
+- the Codex test instance now uses an absolute binary path:
+  `/home/ubuntu/.npm-global/bin/codex`
+  because systemd did not inherit the interactive shell `PATH`
+- Codex test env was switched to dangerous/full-access mode for real repo work:
+  - `CODEX_DANGEROUSLY_SKIP_PERMISSIONS=true`
+  - `CODEX_SANDBOX_MODE=danger-full-access`
+
+Important Codex UX/runtime fixes made after live Discord testing:
+
+- Codex resume argv ordering was fixed so exec-level flags like `--cd` appear
+  before the `resume` subcommand
+- backend-aware session-start and completion wording was added so Codex threads
+  no longer present themselves as Claude threads
+- Codex final-message handling now falls back to assistant text parsed from the
+  JSON event stream when `--output-last-message` is empty, instead of emitting
+  `Codex completed without a final message`
+
+Current known operational blockers outside the core code path:
+
+- the original production bot is still watching the same Discord test channel on
+  the target machine, so both bots can answer in the same thread
+- this is not caused by the dual-backend code itself; it is an operator/channel
+  isolation issue
+- if the original bot must remain untouched, the test bot should move to a
+  different Discord channel that the original bot does not monitor
+
+Current machine-level follow-up order:
+
+- keep the test bot on an isolated Discord channel
+- verify local branch/git behavior inside the intended working repo
+- verify GitHub/fork/auth/network behavior for Codex in that environment
+
+## Production-Readiness Next Steps
+
+Given the work completed so far, the next steps to move this toward a
+production-ready dual-backend release are:
+
+### 1. Finish the Codex v1 product boundary
+
+The core chat path works, but unsupported or Claude-specific features still
+need explicit policy and UX.
+
+Next work:
+
+- design and implement mid-conversation backend switching in the same thread
+  so a thread can move from Claude to Codex or from Codex to Claude without
+  forcing the user to start a new thread
+- gate `/rewind` for Codex threads with a clear unsupported-in-v1 response
+- gate or redesign `/fork` for Codex threads
+- gate `/sync-sessions` for Codex until a Codex-native session-storage story
+  exists
+- audit Claude-only helper flows in `EventProcessor` and skip or replace them
+  for Codex runs
+- decide whether `SkillCommandCog`, `SchedulerCog`, and `WebhookTriggerCog`
+  remain Claude-only in v1 or become backend-aware
+
+Why this matters:
+
+- users may need to continue the same Discord thread after provider quota,
+  outage, or policy issues on one backend
+- the current v1 behavior is backend-sticky per thread/session, which is
+  implementation-simple but operationally limiting
+
+### 2. Verify and harden branch/git/GitHub behavior
+
+The next end-to-end validation should happen in the actual target working repo,
+not only in the bridge repo.
+
+Minimum validation:
+
+- verify local git works inside the configured Codex working directory
+- verify branch create/switch flows work reliably
+- verify remote visibility via `git remote -v`
+- verify GitHub auth availability (`gh` or git credential path)
+- verify whether the Codex subprocess has the outbound network needed for
+  fork/push/PR operations
+
+Why this matters:
+
+- local repo work may succeed while fork/push/PR flows still fail
+- production readiness for repo work is not proven until both local git and
+  GitHub-connected operations are validated
+
+### 3. Harden the runtime and service behavior
+
+Live machine testing exposed the operational edges that should be tightened
+before calling this production-ready.
+
+Next work:
+
+- keep absolute binary paths where systemd `PATH` differences matter
+- verify the intended working repo exists and is accessible before startup
+- add startup/smoke validation for the configured backend binary and working dir
+- verify restart behavior: service restart, reconnect, session resume, and no
+  DB collisions
+- make backend/working-dir failures easy to diagnose from journald logs
+
+### 4. Update operator-facing docs
+
+The implementation is now ahead of the operator documentation.
+
+Next work:
+
+- document the backend-related env/config surface in `.env.example` and README
+- document `CCDB_DEFAULT_BACKEND`
+- document Codex-specific settings:
+  - `CODEX_COMMAND`
+  - `CODEX_MODEL`
+  - `CODEX_PERMISSION_MODE`
+  - `CODEX_WORKING_DIR`
+  - `CODEX_DANGEROUSLY_SKIP_PERMISSIONS`
+  - `CODEX_SANDBOX_MODE`
+- document what Codex supports in v1 and what is intentionally unsupported
+- document how to stand up a second isolated bot instance for testing
+
 ## What Is Still Missing
 
 ### 1. Unsupported Codex-only commands still need gating

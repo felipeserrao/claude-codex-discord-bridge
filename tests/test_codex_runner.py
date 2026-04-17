@@ -36,8 +36,10 @@ class TestBuildArgs:
         output_path = tmp_path / "last.txt"
         args = runner._build_args(output_path=output_path, session_id="rollout-123")
 
-        assert args[:3] == ["codex", "exec", "resume"]
+        assert args[:2] == ["codex", "exec"]
+        assert "resume" in args
         dashdash = args.index("--")
+        assert args[dashdash - 1] == "resume"
         assert args[dashdash + 1] == "rollout-123"
         assert args[dashdash + 2] == "-"
 
@@ -57,6 +59,18 @@ class TestBuildArgs:
         assert "--cd" in args
         assert "/tmp/worktree" in args
 
+    def test_resume_session_places_exec_flags_before_resume_subcommand(
+        self, tmp_path: Path
+    ) -> None:
+        runner = CodexRunner(working_dir="/tmp/worktree")
+
+        args = runner._build_args(output_path=tmp_path / "last.txt", session_id="rollout-123")
+
+        resume_index = args.index("resume")
+        cd_index = args.index("--cd")
+        assert cd_index < resume_index
+        assert args[resume_index + 1] == "--"
+
 
 class TestRun:
     """Tests for CodexRunner.run()."""
@@ -69,9 +83,8 @@ class TestRun:
             b'{"type":"thread.started","thread_id":"rollout-123"}\n',
             b'{"type":"turn.started"}\n',
             b'{"type":"error","message":"Reconnecting... 1/5"}\n',
-            (
-                b'{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}\n'
-            ),
+            b'{"type":"turn.failed","error":{"message":"stream disconnected before '
+            b'completion"}}\n',
             b"",
         ]
 
@@ -182,3 +195,40 @@ class TestRun:
 
         mock_stdin.write.assert_called_once_with(b"say hi")
         mock_stdin.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_run_falls_back_to_assistant_text_when_last_message_missing(self) -> None:
+        runner = CodexRunner()
+
+        stdout_lines = [
+            b'{"type":"thread.started","thread_id":"rollout-789"}\n',
+            b'{"type":"event_msg","message":{"role":"assistant","content":"fallback answer"}}\n',
+            b"",
+        ]
+
+        async def readline() -> bytes:
+            return stdout_lines.pop(0)
+
+        mock_stdin = MagicMock()
+        mock_stdin.write = MagicMock()
+        mock_stdin.drain = AsyncMock()
+        mock_stdin.close = MagicMock()
+
+        mock_process = AsyncMock()
+        mock_process.pid = 100
+        mock_process.returncode = 0
+        mock_process.stdin = mock_stdin
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(side_effect=readline)
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.read = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch.object(runner, "_read_last_message", return_value=None),
+        ):
+            events = [event async for event in runner.run("hello")]
+
+        assert [event.message_type for event in events] == [MessageType.SYSTEM, MessageType.RESULT]
+        assert events[1].text == "fallback answer"

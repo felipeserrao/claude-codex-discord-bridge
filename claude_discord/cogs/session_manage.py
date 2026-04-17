@@ -91,6 +91,11 @@ KNOWN_TOOLS: list[str] = [
 _AUTOCOMPACT_THRESHOLD = 0.835  # Claude Code's default autocompact threshold
 
 
+def _get_explicit_attr(obj: object, name: str) -> object | None:
+    """Return an explicitly assigned attribute without triggering MagicMock fallback."""
+    return vars(obj).get(name)
+
+
 def _progress_bar(ratio: float, width: int = 20) -> str:
     """Return a block-character progress bar, e.g. '████████░░░░░░░░░░░░'."""
     filled = round(ratio * width)
@@ -130,7 +135,7 @@ class SessionManageCog(commands.Cog):
         self.usage_repo = usage_repo
         self._default_backend = normalize_backend(
             default_backend
-            or getattr(bot, "default_backend", None)
+            or _get_explicit_attr(bot, "default_backend")
             or os.getenv("CCDB_DEFAULT_BACKEND")
         )
         # Optional ClaudeRunner reference for reading the default model.

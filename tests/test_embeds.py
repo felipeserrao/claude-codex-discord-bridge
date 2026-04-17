@@ -6,6 +6,7 @@ from claude_discord.claude.types import ToolCategory, ToolUseEvent
 from claude_discord.discord_ui.embeds import (
     redacted_thinking_embed,
     session_complete_embed,
+    session_start_embed,
     thinking_embed,
     tool_result_embed,
     tool_use_embed,
@@ -74,6 +75,16 @@ class TestSessionCompleteEmbed:
         embed = session_complete_embed(input_tokens=500, output_tokens=100, cache_read_tokens=0)
         assert embed.description is not None
         assert "%" not in embed.description
+
+
+class TestSessionStartEmbed:
+    def test_claude_start_embed_title(self) -> None:
+        embed = session_start_embed("sess-1", backend="claude")
+        assert embed.title == "🤖 Claude Code session started"
+
+    def test_codex_start_embed_title(self) -> None:
+        embed = session_start_embed("sess-1", backend="codex")
+        assert embed.title == "🤖 Codex session started"
 
 
 class TestSessionCompleteContextUsage:
