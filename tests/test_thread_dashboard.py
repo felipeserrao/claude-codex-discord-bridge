@@ -144,6 +144,30 @@ class TestOwnerMention:
         assert "<@42>" in sent_text
 
     @pytest.mark.asyncio
+    async def test_mention_uses_codex_label_for_codex_threads(self) -> None:
+        dashboard, _ = _make_dashboard(owner_id=42)
+        await dashboard.initialize()
+        thread = _make_thread(10)
+
+        await dashboard.set_state(
+            10,
+            ThreadState.PROCESSING,
+            "working",
+            thread=thread,
+            backend="codex",
+        )
+        await dashboard.set_state(
+            10,
+            ThreadState.WAITING_INPUT,
+            "working",
+            thread=thread,
+            backend="codex",
+        )
+
+        sent_text = thread.send.call_args.args[0]
+        assert "Codex has finished" in sent_text
+
+    @pytest.mark.asyncio
     async def test_mention_not_sent_if_already_waiting(self) -> None:
         """Repeated WAITING_INPUT transitions should NOT spam mentions."""
         dashboard, _ = _make_dashboard(owner_id=42)

@@ -111,7 +111,7 @@ class TestOnSystem:
 
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
-        repo.save.assert_called_once_with(thread.id, "s1", summary="test prompt")
+        repo.save.assert_called_once_with(thread.id, "s1", backend="claude", summary="test prompt")
 
     @pytest.mark.asyncio
     async def test_saves_to_repo_without_summary_for_resumed_session(
@@ -125,7 +125,7 @@ class TestOnSystem:
 
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="existing-sess"))
 
-        repo.save.assert_called_once_with(thread.id, "existing-sess")
+        repo.save.assert_called_once_with(thread.id, "existing-sess", backend="claude")
 
     @pytest.mark.asyncio
     async def test_summary_truncated_to_100_chars(
@@ -140,7 +140,7 @@ class TestOnSystem:
 
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
-        repo.save.assert_called_once_with(thread.id, "s1", summary="x" * 100)
+        repo.save.assert_called_once_with(thread.id, "s1", backend="claude", summary="x" * 100)
 
     @pytest.mark.asyncio
     async def test_sends_start_embed_for_new_session(
@@ -155,6 +155,18 @@ class TestOnSystem:
         thread.send.assert_called_once()
         call_kwargs = thread.send.call_args.kwargs
         assert "embed" in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_codex_start_embed_uses_codex_title(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        config = _make_config(thread, runner, backend="codex")
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="new-sess"))
+
+        embed = thread.send.call_args.kwargs["embed"]
+        assert embed.title == "🤖 Codex session started"
 
     @pytest.mark.asyncio
     async def test_no_start_embed_for_resumed_session(

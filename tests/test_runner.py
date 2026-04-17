@@ -453,6 +453,23 @@ class TestRunTimeout:
     """Tests for timeout handling in run()."""
 
     @pytest.mark.asyncio
+    async def test_run_yields_error_when_claude_command_is_missing(self) -> None:
+        """run() yields a normal error event when the configured CLI binary is missing."""
+        runner = ClaudeRunner(command="claude")
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=FileNotFoundError(2, "No such file or directory", "claude"),
+        ):
+            events = [event async for event in runner.run("hello")]
+
+        assert len(events) == 1
+        assert events[0].is_complete
+        assert events[0].error is not None
+        assert "not found" in events[0].error.lower()
+        assert "claude" in events[0].error
+
+    @pytest.mark.asyncio
     async def test_run_yields_error_on_asyncio_timeout(self) -> None:
         """run() yields a timeout error event on asyncio.TimeoutError (Python 3.10 compat).
 

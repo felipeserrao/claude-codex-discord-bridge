@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import discord
 
+from ..backends import BackendKind, normalize_backend
 from ..claude.types import TodoItem, ToolCategory, ToolUseEvent
 
 # Colors
@@ -54,10 +55,21 @@ def tool_use_embed(
     return embed
 
 
-def session_start_embed(session_id: str | None = None) -> discord.Embed:
+def _agent_name(backend: BackendKind | str | None) -> str:
+    """Return the human-facing agent/provider name for a backend."""
+    normalized = normalize_backend(backend)
+    if normalized == "codex":
+        return "Codex"
+    return "Claude Code"
+
+
+def session_start_embed(
+    session_id: str | None = None,
+    backend: BackendKind | str | None = None,
+) -> discord.Embed:
     """Create an embed for session start."""
     embed = discord.Embed(
-        title="\U0001f916 Claude Code session started",
+        title=f"\U0001f916 {_agent_name(backend)} session started",
         color=COLOR_INFO,
     )
     if session_id:
