@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from claude_discord.claude.types import MessageType
+from claude_discord.claude.types import ImageData, MessageType
 from claude_discord.codex.runner import CodexRunner
 
 
@@ -27,8 +27,8 @@ class TestBuildArgs:
         assert str(output_path) in args
         assert "--model" in args
         assert "gpt-5-codex" in args
-        assert "--" in args
-        assert args[-1] == "-"
+        assert "--" not in args
+        assert "-" not in args
 
     def test_resume_session_uses_resume_subcommand(self, tmp_path: Path) -> None:
         runner = CodexRunner(command="codex")
@@ -36,10 +36,8 @@ class TestBuildArgs:
         output_path = tmp_path / "last.txt"
         args = runner._build_args(output_path=output_path, session_id="rollout-123")
 
-        assert args[:3] == ["codex", "exec", "resume"]
-        dashdash = args.index("--")
-        assert args[dashdash + 1] == "rollout-123"
-        assert args[dashdash + 2] == "-"
+        assert args[:2] == ["codex", "exec"]
+        assert args[-2:] == ["resume", "rollout-123"]
 
     def test_dangerously_skip_permissions_uses_bypass_flag(self, tmp_path: Path) -> None:
         runner = CodexRunner(dangerously_skip_permissions=True)
@@ -182,3 +180,27 @@ class TestRun:
 
         mock_stdin.write.assert_called_once_with(b"say hi")
         mock_stdin.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_image_only_run_uses_fallback_prompt(self, tmp_path: Path) -> None:
+        runner = CodexRunner(images=[ImageData(data="aGVsbG8=", media_type="image/png")])
+
+        mock_stdin = MagicMock()
+        mock_stdin.write = MagicMock()
+        mock_stdin.drain = AsyncMock()
+        mock_stdin.close = MagicMock()
+
+        mock_process = AsyncMock()
+        mock_process.pid = 8
+        mock_process.returncode = 0
+        mock_process.stdin = mock_stdin
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.read = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            _ = [event async for event in runner.run("")]
+
+        mock_stdin.write.assert_called_once_with(b"Please analyze the attached image.")

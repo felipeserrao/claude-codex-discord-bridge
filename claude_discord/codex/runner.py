@@ -210,8 +210,6 @@ class CodexRunner:
     ) -> list[str]:
         """Build command-line arguments for the Codex CLI."""
         args = [self.command, "exec"]
-        if session_id:
-            args.append("resume")
 
         args.extend(
             [
@@ -238,12 +236,8 @@ class CodexRunner:
         for image_path in image_paths or []:
             args.extend(["--image", image_path])
 
-        # Prompt is sent via stdin using the "-" sentinel so user text never
-        # becomes part of option parsing.
-        args.append("--")
         if session_id:
-            args.append(session_id)
-        args.append("-")
+            args.extend(["resume", session_id])
 
         return args
 
@@ -279,6 +273,8 @@ class CodexRunner:
 
     def _compose_prompt(self, prompt: str) -> str:
         """Combine provider-agnostic injected context with the user prompt."""
+        if not prompt and self.images:
+            prompt = "Please analyze the attached image."
         if self.append_system_prompt and prompt:
             return f"{self.append_system_prompt}\n\n---\n\n{prompt}"
         if self.append_system_prompt:
