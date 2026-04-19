@@ -36,6 +36,7 @@ htmlcov/
 
 # Local operator/runtime artifacts
 *.log
+DUAL_BACKEND_HANDOFF.md
 HANDOFF_PROMPT.md
 DUAL_BACKEND_HANDOFF.local.md
 discord-bot-test-codex.service
