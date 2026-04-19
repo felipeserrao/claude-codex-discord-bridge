@@ -451,6 +451,18 @@ class TestBackendRouting:
         assert cog._run_claude.call_args.kwargs["session_id"] == "rollout-222"
 
     @pytest.mark.asyncio
+    async def test_thread_reply_without_session_uses_default_backend(self) -> None:
+        """Manual threads without a session record should use the configured default backend."""
+        cog, _, _ = self._make_cog(default_backend="codex")
+        message = self._make_thread_message()
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(message)
+
+        assert cog._run_claude.call_args.kwargs["backend"] == "codex"
+        assert cog._run_claude.call_args.kwargs["session_id"] is None
+
+    @pytest.mark.asyncio
     async def test_on_ready_uses_backend_from_stored_session_record(self) -> None:
         """Startup resume should pick the runner using the stored session backend."""
         from claude_discord.database.repository import SessionRecord
