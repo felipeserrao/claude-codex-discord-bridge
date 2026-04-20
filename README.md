@@ -293,6 +293,37 @@ Step 3 — Discord Channel ID
   Start the bot now? [Y/n]: y
 ```
 
+### Running with Codex Instead of Claude
+
+The tracked repository supports both backends, but the Codex path needs a few
+extra env vars beyond the default wizard flow.
+
+At minimum, set these in your local `.env`:
+
+```bash
+CCDB_DEFAULT_BACKEND=codex
+CODEX_COMMAND=/absolute/path/to/codex   # or just "codex" if it is on PATH
+CODEX_WORKING_DIR=/absolute/path/to/the/repo/you/want/codex-to-use
+```
+
+Common optional Codex settings:
+
+```bash
+CODEX_MODEL=
+CODEX_PERMISSION_MODE=default
+CODEX_SANDBOX_MODE=workspace-write
+CODEX_DANGEROUSLY_SKIP_PERMISSIONS=false
+```
+
+Notes:
+
+- In service environments, prefer an absolute `CODEX_COMMAND` because `systemd`
+  often has a narrower `PATH` than your interactive shell.
+- `CODEX_WORKING_DIR` should point at the repository Codex will actually edit,
+  not necessarily the bridge repo itself.
+- The bridge runtime checkout will still have local-only runtime files such as
+  `.env`, `.venv`, and `data/`; those are intentionally not tracked in git.
+
 ### Start / Stop
 
 ```bash
@@ -322,6 +353,23 @@ sudo systemctl start mybot.service
 sudo systemctl status mybot.service
 journalctl -u mybot.service -f
 ```
+
+For a Codex-backed bot, the same `discord-bot.service` template works. The
+service becomes "Codex-backed" through the env file, not through a different
+Python entrypoint. In practice this means:
+
+- set `CCDB_DEFAULT_BACKEND=codex` in the env file used by the service
+- set `CODEX_COMMAND` explicitly, ideally as an absolute path
+- set `CODEX_WORKING_DIR` to the target repo Codex should operate in
+
+If you want to run a second isolated bot instance for testing, create:
+
+- a separate env file (for example `.env.test-codex`)
+- a separate systemd unit name (for example `discord-bot-test-codex.service`)
+- optionally a separate Discord bot token and/or channel
+
+Do not reuse the same env file blindly for both production and test instances.
+Keep each instance's token, channel, and working-directory settings isolated.
 
 **What `scripts/pre-start.sh` does** (runs as `ExecStartPre` before the bot process):
 
