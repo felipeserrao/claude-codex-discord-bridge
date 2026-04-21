@@ -984,6 +984,34 @@ class TestConcurrencyIntegration:
         # No system context → runner.clone should not have been called.
         runner.clone.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_extra_system_prompt_is_injected_via_clone(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        """Per-run handoff context should flow through append_system_prompt."""
+        captured_prompt = []
+
+        async def capturing_gen(prompt, **kwargs):
+            captured_prompt.append(prompt)
+            for e in self._simple_events():
+                yield e
+
+        runner.run = capturing_gen
+
+        config = RunConfig(
+            thread=thread,
+            runner=runner,
+            repo=repo,
+            prompt="continue the task",
+            extra_system_prompt="HANDOFF SNAPSHOT",
+        )
+        await run_claude_with_config(config)
+
+        assert captured_prompt == ["continue the task"]
+        runner.clone.assert_called_once()
+        system_prompt = runner.clone.call_args.kwargs.get("append_system_prompt", "")
+        assert "HANDOFF SNAPSHOT" in system_prompt
+
 
 class TestLiveToolTimer:
     """Tests for LiveToolTimer elapsed-time embed updates."""

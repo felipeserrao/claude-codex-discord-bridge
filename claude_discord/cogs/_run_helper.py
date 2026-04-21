@@ -101,6 +101,10 @@ async def _build_system_context(config: RunConfig) -> str | None:
             "No session registry — concurrency notice skipped for thread %d", config.thread.id
         )
 
+    # Per-run handoff or control context supplied by the caller.
+    if config.extra_system_prompt:
+        parts.append(config.extra_system_prompt)
+
     # File attachment instruction: injected only when the user asked for files.
     if config.attach_on_request:
         wd = config.runner.working_dir or "your current working directory"

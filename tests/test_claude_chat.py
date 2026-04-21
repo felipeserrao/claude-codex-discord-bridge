@@ -10,6 +10,7 @@ import pytest
 
 from claude_discord.cogs.claude_chat import ClaudeChatCog
 from claude_discord.concurrency import SessionRegistry
+from claude_discord.database.repository import SessionRecord
 
 
 def _make_cog() -> ClaudeChatCog:
@@ -30,9 +31,14 @@ def _make_thread_interaction(thread_id: int = 12345) -> MagicMock:
     interaction = MagicMock(spec=discord.Interaction)
     thread = MagicMock(spec=discord.Thread)
     thread.id = thread_id
+    thread.send = AsyncMock()
+    thread.parent_id = 999
     interaction.channel = thread
     interaction.response = MagicMock()
     interaction.response.send_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
     return interaction
 
 
@@ -157,6 +163,95 @@ class TestActiveCountAlias:
         cog._active_runners[2] = MagicMock()
         assert cog.active_count == 2
         assert cog.active_count == cog.active_session_count
+
+
+class TestSwitchAgentCommand:
+    @pytest.mark.asyncio
+    async def test_switch_agent_outside_thread_sends_ephemeral(self) -> None:
+        cog = _make_cog()
+        interaction = _make_channel_interaction()
+
+        await cog.switch_agent.callback(cog, interaction, "codex", None)
+
+        interaction.response.send_message.assert_called_once()
+        assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
+
+    @pytest.mark.asyncio
+    async def test_switch_agent_without_persisted_session_sends_ephemeral(self) -> None:
+        cog = _make_cog()
+        interaction = _make_thread_interaction()
+        cog.repo.get = AsyncMock(return_value=None)
+
+        await cog.switch_agent.callback(cog, interaction, "codex", None)
+
+        interaction.response.send_message.assert_called_once()
+        assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
+
+    @pytest.mark.asyncio
+    async def test_switch_agent_rejects_same_backend(self) -> None:
+        cog = _make_cog()
+        interaction = _make_thread_interaction()
+        cog.repo.get = AsyncMock(
+            return_value=SessionRecord(
+                thread_id=interaction.channel.id,
+                session_id="sess-1",
+                working_dir="/tmp/project",
+                model="sonnet",
+                origin="discord",
+                summary="Continue",
+                created_at="2026-04-21 10:00:00",
+                last_used_at="2026-04-21 10:05:00",
+                backend="claude",
+            )
+        )
+
+        await cog.switch_agent.callback(cog, interaction, "claude", None)
+
+        interaction.response.send_message.assert_called_once()
+        assert interaction.response.send_message.call_args.kwargs["ephemeral"] is True
+
+    @pytest.mark.asyncio
+    async def test_switch_agent_interrupts_and_starts_new_backend_session(self) -> None:
+        cog = _make_cog()
+        interaction = _make_thread_interaction(thread_id=444)
+        thread = interaction.channel
+        seed_message = MagicMock(spec=discord.Message)
+        thread.send = AsyncMock(side_effect=[None, seed_message])
+        cog.repo.get = AsyncMock(
+            return_value=SessionRecord(
+                thread_id=444,
+                session_id="sess-1",
+                working_dir="/tmp/project",
+                model="sonnet",
+                origin="discord",
+                summary="Investigate flaky test",
+                created_at="2026-04-21 10:00:00",
+                last_used_at="2026-04-21 10:05:00",
+                backend="claude",
+            )
+        )
+        cog._build_switch_handoff = AsyncMock(return_value=("Continue from here.", "HANDOFF"))
+        cog._run_claude = AsyncMock()
+
+        existing_runner = MagicMock()
+        existing_runner.interrupt = AsyncMock()
+        cog._active_runners[444] = existing_runner
+
+        done_task = asyncio.get_running_loop().create_future()
+        done_task.set_result(None)
+        cog._active_tasks[444] = done_task
+
+        await cog.switch_agent.callback(cog, interaction, "codex", "Focus on the failing tests")
+        await asyncio.sleep(0)
+
+        existing_runner.interrupt.assert_awaited_once()
+        cog._run_claude.assert_awaited_once()
+        _, kwargs = cog._run_claude.call_args
+        assert kwargs["session_id"] is None
+        assert kwargs["backend"] == "codex"
+        assert kwargs["working_dir_override"] == "/tmp/project"
+        assert kwargs["extra_system_prompt"] == "HANDOFF"
+        interaction.followup.send.assert_called_once()
 
 
 class TestRegistryAutoDiscovery:

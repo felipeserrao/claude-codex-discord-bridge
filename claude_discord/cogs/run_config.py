@@ -66,6 +66,11 @@ class RunConfig:
     registry: SessionRegistry | None = None
     ask_repo: PendingAskRepository | None = None
     lounge_repo: LoungeRepository | None = None
+    # Extra per-run handoff or control context injected alongside the standard
+    # ephemeral system prompt. Useful for cross-agent handoffs where the
+    # visible user prompt should stay concise but the new backend needs a
+    # structured snapshot of prior context and safety constraints.
+    extra_system_prompt: str | None = None
     stop_view: StopView | None = None
     worktree_manager: WorktreeManager | None = None
     # Base64-encoded image data for stream-json base64-type image blocks.

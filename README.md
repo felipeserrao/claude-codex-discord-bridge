@@ -149,6 +149,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Concurrent sessions** — Multiple parallel sessions with configurable limit
 - **Stop without clearing** — `/stop` halts a session while preserving it for resume
 - **Session interrupt** — Sending a new message to an active thread sends SIGINT to the running session and starts fresh with the new instruction; no manual `/stop` needed
+- **Mid-thread agent switch** — `/switch-agent` starts a fresh session on the other backend in the same thread, carrying over a compact handoff snapshot and recent transcript while explicitly resetting prior approvals
 - **Auto-rename threads** — When `THREAD_AUTO_RENAME=true`, each new thread is automatically renamed with a Claude-generated title derived from the first message (background task, never delays session start)
 
 #### 📡 Real-time Feedback
@@ -207,6 +208,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Session list** — `/sessions` with filtering by origin (Discord / CLI / all) and time window
 - **Session resume** — `/resume` shows a select menu of recent sessions (up to 25) and resumes the selected one in a new thread; works from any channel or thread — always creates a new thread in the configured main channel
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal (thread-only)
+- **Agent switch** — `/switch-agent` swaps the current thread to Claude or Codex without opening a new thread; the new backend starts as a fresh session with a structured handoff snapshot, recent transcript, and a safety reset for prior approvals
 - **Clear session** — `/clear` resets the Claude Code session for the current thread, starting fresh without creating a new thread
 - **Startup resume** — Interrupted sessions restart automatically after any bot reboot; `AutoUpgradeCog` (upgrade restarts) and `ClaudeChatCog.cog_unload()` (all other shutdowns) mark them automatically, or use `POST /api/mark-resume` manually
 - **Programmatic spawn** — `POST /api/spawn` creates a new Discord thread + Claude session from any script or Claude subprocess; returns non-blocking 201 immediately after thread creation

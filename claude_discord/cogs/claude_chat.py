@@ -60,6 +60,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "session": "📌 Session",
     "claude": "📌 Session",
     "codex": "📌 Session",
+    "switch-agent": "📌 Session",
     "stop": "📌 Session",
     "clear": "📌 Session",
     "rewind": "📌 Session",
@@ -91,6 +92,18 @@ _BACKEND_CHOICES = [
     app_commands.Choice(name="Claude", value="claude"),
     app_commands.Choice(name="Codex", value="codex"),
 ]
+
+_DEFAULT_SWITCH_PROMPT = (
+    "Continue helping with this thread. Start by briefly restating the current objective "
+    "and your next step."
+)
+_MAX_HANDOFF_MESSAGES = 8
+_MAX_HANDOFF_CHARS = 3500
+
+
+def _agent_label(backend: BackendKind | str | None) -> str:
+    """Return the human-facing backend name used in thread messages."""
+    return "Codex" if normalize_backend(backend) == "codex" else "Claude"
 
 
 def _get_explicit_attr(obj: object, name: str) -> object | None:
@@ -239,6 +252,105 @@ class ClaudeChatCog(commands.Cog):
         if raw_backend is None or isinstance(raw_backend, str):
             return normalize_backend(raw_backend)
         return DEFAULT_BACKEND
+
+    @staticmethod
+    def _is_technical_thread_message(content: str) -> bool:
+        """Return True for bot control messages that should not enter a handoff transcript."""
+        stripped = content.strip()
+        return (
+            not stripped
+            or stripped.startswith("-# ")
+            or stripped.startswith("🔄 **Bot restarted.")
+            or stripped.startswith("🔁 Switching this thread")
+        )
+
+    async def _collect_recent_thread_context(self, thread: discord.Thread) -> str:
+        """Return a compact transcript slice for backend handoff prompts."""
+        entries: list[str] = []
+        total_chars = 0
+
+        async for message in thread.history(limit=_MAX_HANDOFF_MESSAGES, oldest_first=False):
+            content = (message.content or "").strip()
+            if self._is_technical_thread_message(content):
+                continue
+
+            author = "Assistant" if message.author.bot else "User"
+            entry = f"{author}: {content}"
+
+            attachments = getattr(message, "attachments", None) or []
+            names = [a.filename for a in attachments if getattr(a, "filename", None)]
+            if names:
+                entry += f"\nAttachments: {', '.join(names[:4])}"
+
+            if len(entry) > 900:
+                entry = entry[:897] + "..."
+
+            projected = total_chars + len(entry) + 2
+            if projected > _MAX_HANDOFF_CHARS:
+                if not entries:
+                    entries.append(entry[: _MAX_HANDOFF_CHARS - 3] + "...")
+                break
+
+            entries.append(entry)
+            total_chars = projected
+
+        entries.reverse()
+        return "\n\n".join(entries)
+
+    async def _build_switch_handoff(
+        self,
+        thread: discord.Thread,
+        record: object,
+        *,
+        target_backend: BackendKind,
+        prompt: str | None,
+    ) -> tuple[str, str]:
+        """Build the visible instruction and structured handoff context for a backend switch."""
+        source_backend = self._get_record_backend(record)
+        summary = (getattr(record, "summary", None) or "").strip() or "(no stored summary)"
+        working_dir = (
+            getattr(record, "working_dir", None)
+            or self._get_runner_for_backend(source_backend).working_dir
+            or "(default working directory)"
+        )
+        next_prompt = prompt.strip() if prompt and prompt.strip() else _DEFAULT_SWITCH_PROMPT
+        transcript = await self._collect_recent_thread_context(thread)
+        handoff = (
+            "## Agent Switch Handoff\n"
+            "You are taking over an existing Discord conversation from another backend.\n"
+            f"Previous backend: {_agent_label(source_backend)}\n"
+            f"New backend: {_agent_label(target_backend)}\n"
+            f"Working directory: {working_dir}\n"
+            f"Stored summary: {summary}\n\n"
+            "## Safety Rules\n"
+            "Treat pending tasks, prior approvals, and implied next steps as informational only.\n"
+            "Do not assume permission carries over from the previous backend.\n"
+            "Before making code changes, commits, PRs, external API calls, or other "
+            "consequential actions, re-confirm with the user if the current request is "
+            "not explicit.\n\n"
+            "## Recent Thread Transcript\n"
+            f"{transcript or '(No recent thread transcript available.)'}"
+        )
+        return next_prompt, handoff
+
+    async def _interrupt_active_session(
+        self,
+        thread: discord.Thread,
+        *,
+        notice: str | None = None,
+    ) -> None:
+        """Interrupt and fully drain the active runner for a thread, if any."""
+        existing_runner = self._active_runners.get(thread.id)
+        existing_task = self._active_tasks.get(thread.id)
+        if existing_runner is None:
+            return
+
+        if notice:
+            await thread.send(notice)
+        await existing_runner.interrupt()
+        if existing_task is not None and not existing_task.done():
+            with contextlib.suppress(Exception):
+                await existing_task
 
     def _resolve_session_start_channel(
         self,
@@ -465,6 +577,91 @@ class ClaudeChatCog(commands.Cog):
             interaction,
             backend="codex",
             prompt=prompt,
+        )
+
+    @app_commands.command(
+        name="switch-agent",
+        description="Switch this thread to a fresh session on another backend",
+    )
+    @app_commands.describe(
+        backend="Backend to switch this thread to",
+        prompt="Optional instruction for the new backend after handoff",
+    )
+    @app_commands.choices(backend=_BACKEND_CHOICES)
+    async def switch_agent(
+        self,
+        interaction: discord.Interaction,
+        backend: str,
+        prompt: str | None = None,
+    ) -> None:
+        """Switch the current thread to a new session on another backend."""
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message(
+                "This command can only be used in a Claude chat thread.", ephemeral=True
+            )
+            return
+
+        thread = interaction.channel
+        record = await self.repo.get(thread.id)
+        if record is None:
+            await interaction.response.send_message(
+                "No persisted session found for this thread yet. "
+                "Wait for the current session to start, then try again.",
+                ephemeral=True,
+            )
+            return
+
+        current_backend = self._get_record_backend(record)
+        target_backend = normalize_backend(backend)
+        if target_backend == current_backend:
+            await interaction.response.send_message(
+                f"This thread is already using `{target_backend}`.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        next_prompt, handoff_context = await self._build_switch_handoff(
+            thread,
+            record,
+            target_backend=target_backend,
+            prompt=prompt,
+        )
+
+        await self._interrupt_active_session(
+            thread,
+            notice=(
+                f"-# 🔁 Switching from {_agent_label(current_backend)} "
+                f"to {_agent_label(target_backend)}..."
+            ),
+        )
+
+        seed_text = (
+            f"🔁 Switching this thread from {_agent_label(current_backend)} "
+            f"to {_agent_label(target_backend)}.\n"
+            f"Starting a fresh {_agent_label(target_backend)} session with a handoff snapshot."
+        )
+        if prompt and prompt.strip():
+            seed_text += f"\n\nNext instruction: {prompt.strip()}"
+
+        seed_message = await thread.send(seed_text)
+        chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
+        asyncio.create_task(
+            self._run_claude(
+                seed_message,
+                thread,
+                next_prompt,
+                session_id=None,
+                backend=target_backend,
+                working_dir_override=record.working_dir,
+                extra_system_prompt=handoff_context,
+                chat_only=chat_only,
+            )
+        )
+
+        await interaction.followup.send(
+            f"Switching this thread from `{current_backend}` to `{target_backend}`.",
+            ephemeral=True,
         )
 
     @app_commands.command(name="stop", description="Stop the active session (session is preserved)")
@@ -948,16 +1145,10 @@ class ClaudeChatCog(commands.Cog):
                     await _dashboard.refresh_inbox(_inbox_repo)
 
         # Interrupt any active session in this thread before starting a new one.
-        existing_runner = self._active_runners.get(thread.id)
-        existing_task = self._active_tasks.get(thread.id)
-        if existing_runner is not None:
-            await thread.send("-# ⚡ Interrupted. Starting with new instruction...")
-            await existing_runner.interrupt()
-            # Wait for the interrupted _run_claude to finish its finally block
-            # (which releases the semaphore and removes entries from dicts).
-            if existing_task is not None and not existing_task.done():
-                with contextlib.suppress(Exception):
-                    await existing_task
+        await self._interrupt_active_session(
+            thread,
+            notice="-# ⚡ Interrupted. Starting with new instruction...",
+        )
 
         # Determine chat_only from the parent channel of this thread.
         chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
@@ -1020,6 +1211,7 @@ class ClaudeChatCog(commands.Cog):
         images: list[ImageData] | None = None,
         fork: bool = False,
         working_dir_override: str | None = None,
+        extra_system_prompt: str | None = None,
         chat_only: bool = False,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
@@ -1108,6 +1300,7 @@ class ClaudeChatCog(commands.Cog):
                         registry=self._registry,
                         ask_repo=self._ask_repo,
                         lounge_repo=self._lounge_repo,
+                        extra_system_prompt=extra_system_prompt,
                         stop_view=stop_view,
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
                         images=images,
