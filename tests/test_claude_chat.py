@@ -1359,6 +1359,30 @@ class TestInlineReplyChannels:
 
         msg.create_thread.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_non_inline_channel_reuses_existing_thread_when_message_already_has_one(self) -> None:
+        """If Discord says a thread already exists for the message, reuse it."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+        mock_thread = MagicMock(spec=discord.Thread)
+        msg = self._make_channel_message(channel_id=111)
+        msg.thread = mock_thread
+        response = MagicMock()
+        response.status = 400
+        response.reason = "Bad Request"
+        msg.create_thread = AsyncMock(
+            side_effect=discord.HTTPException(
+                response,
+                {"code": 160004, "message": "A thread has already been created for this message"},
+            )
+        )
+
+        await cog._handle_new_conversation(msg)
+
+        cog._run_claude.assert_awaited_once()
+        _, called_thread, *_ = cog._run_claude.call_args.args
+        assert called_thread is mock_thread
+
     def test_inline_reply_channel_ids_default_to_empty_set(self) -> None:
         """Without inline_reply_channel_ids, the set is empty (thread mode for all channels)."""
         cog = self._make_cog(channel_ids={111})
