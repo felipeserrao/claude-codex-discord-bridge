@@ -102,6 +102,7 @@ class ClaudeChatCog(commands.Cog):
         chat_only_channel_ids: set[int] | None = None,
         auto_rename_threads: bool = False,
         monitor_all_channels: bool = False,
+        mention_only_all_channels: bool = False,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -110,6 +111,8 @@ class ClaudeChatCog(commands.Cog):
         self._allowed_user_ids = allowed_user_ids
         # When True, skip channel-ID filtering and accept all guild channels.
         self._monitor_all_channels = monitor_all_channels
+        # When True, require an explicit @mention to start new sessions in any channel.
+        self._mention_only_all_channels = mention_only_all_channels
         # Set of channel IDs to listen on.  When provided, overrides bot.channel_id.
         # Falls back to {bot.channel_id} for backward compatibility.
         if channel_ids is not None:
@@ -143,6 +146,16 @@ class ClaudeChatCog(commands.Cog):
         self._settings_repo = settings_repo or getattr(bot, "settings_repo", None)
         # When True, rename the thread after creation using a claude -p title suggestion
         self._auto_rename_threads = auto_rename_threads
+
+    def _requires_mention_for_channel(self, channel_id: int) -> bool:
+        """Return True when a new session in ``channel_id`` needs an explicit @mention."""
+        return self._mention_only_all_channels or channel_id in self._mention_only_channel_ids
+
+    def _requires_mention_for_thread(self, parent_id: int | None) -> bool:
+        """Return True when a thread reply under ``parent_id`` needs an explicit @mention."""
+        if self._mention_only_all_channels:
+            return True
+        return parent_id in self._mention_only_channel_ids if parent_id is not None else False
 
     @property
     def active_session_count(self) -> int:
@@ -229,23 +242,19 @@ class ClaudeChatCog(commands.Cog):
 
         # Check if message is in one of the configured channels (new conversation)
         if is_target_channel:
-            # In mention-only channels, only respond when the bot is @mentioned
-            if (
-                message.channel.id in self._mention_only_channel_ids
-                and self.bot.user not in message.mentions
-            ):
+            # In mention-only modes, only respond when the bot is @mentioned.
+            if self._requires_mention_for_channel(message.channel.id) and self.bot.user not in message.mentions:
                 return
             await self._handle_new_conversation(message)
             return
 
         # Check if message is in a thread under one of the configured channels
         if is_target_thread:
-            # In threads under mention-only channels, require @mention unless
-            # the bot already has an active session in this thread (i.e. user
-            # properly invoked the bot earlier via @mention in the parent).
+            # In mention-only modes, require @mention unless the bot already
+            # has an active session in this thread.
             if (
                 isinstance(message.channel, discord.Thread)
-                and message.channel.parent_id in self._mention_only_channel_ids
+                and self._requires_mention_for_thread(message.channel.parent_id)
                 and self.bot.user not in message.mentions
             ):
                 record = await self.repo.get(message.channel.id)

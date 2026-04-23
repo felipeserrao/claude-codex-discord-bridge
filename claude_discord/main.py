@@ -59,6 +59,7 @@ def load_config() -> dict[str, str]:
         "cli_sessions_path": os.getenv("CLI_SESSIONS_PATH", ""),
         "thread_inbox_enabled": os.getenv("THREAD_INBOX_ENABLED", "false"),
         "monitor_all_channels": os.getenv("CLAUDE_MONITOR_ALL_CHANNELS", "false"),
+        "mention_only_all_channels": os.getenv("MENTION_ONLY_ALL_CHANNELS", "false"),
         "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
     }
 
@@ -130,6 +131,8 @@ async def main() -> None:
             cli_sessions_path=config["cli_sessions_path"] or None,
             enable_thread_inbox=config["thread_inbox_enabled"].lower() == "true",
             monitor_all_channels=config["monitor_all_channels"].lower() in ("true", "1", "yes"),
+            mention_only_all_channels=config["mention_only_all_channels"].lower()
+            in ("true", "1", "yes"),
         )
 
         # Load custom Cogs from external directory

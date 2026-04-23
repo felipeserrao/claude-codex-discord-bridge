@@ -82,6 +82,7 @@ async def setup_bridge(
     enable_thread_inbox: bool = False,
     auto_rename_threads: bool | None = None,
     monitor_all_channels: bool | None = None,
+    mention_only_all_channels: bool | None = None,
 ) -> BridgeComponents:
     """Initialize and register all ccdb Cogs in one call.
 
@@ -112,6 +113,11 @@ async def setup_bridge(
                                   affected (they are already within an active session).
                                   Defaults to MENTION_ONLY_CHANNEL_IDS env var
                                   (comma-separated).
+        mention_only_all_channels: When True, require an explicit @mention to
+                                   start a new session in any eligible channel.
+                                   Threads still continue without a re-mention
+                                   once a session already exists. Defaults to
+                                   MENTION_ONLY_ALL_CHANNELS env var.
         chat_only_channel_ids: Channel IDs where only text responses are shown.
                                Tool embeds, thinking blocks, and session chrome are
                                hidden.  Useful for public channels where non-technical
@@ -202,6 +208,16 @@ async def setup_bridge(
     if monitor_all_channels:
         logger.info("Monitor-all-channels enabled — bot will respond in ANY guild channel")
 
+    # Mention-only-all-channels — fall back to MENTION_ONLY_ALL_CHANNELS env var
+    if mention_only_all_channels is None:
+        mention_only_all_channels = os.getenv("MENTION_ONLY_ALL_CHANNELS", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+    if mention_only_all_channels:
+        logger.info("Mention-only-all-channels enabled — bot requires @mention in any channel")
+
     # WorktreeManager — attach to bot so cogs can access it via bot.worktree_manager
     if worktree_base_dir is None:
         worktree_base_dir = os.getenv("WORKTREE_BASE_DIR")
@@ -248,6 +264,7 @@ async def setup_bridge(
         chat_only_channel_ids=chat_only_channel_ids or None,
         auto_rename_threads=auto_rename_threads,
         monitor_all_channels=monitor_all_channels,
+        mention_only_all_channels=mention_only_all_channels,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")
