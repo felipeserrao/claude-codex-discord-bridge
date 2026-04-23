@@ -239,14 +239,11 @@ class CodexRunner:
         if session_id:
             # ``resume`` is a subcommand of ``codex exec``, so ``exec``-level
             # flags like ``--cd`` must appear before the subcommand.
-            args.append("resume")
+            args.extend(["resume", session_id])
 
         # Prompt is sent via stdin using the "-" sentinel so user text never
         # becomes part of option parsing.
-        args.append("--")
-        if session_id:
-            args.append(session_id)
-        args.append("-")
+        args.extend(["--", "-"])
 
         return args
 

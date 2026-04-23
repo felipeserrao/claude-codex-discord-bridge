@@ -38,10 +38,11 @@ class TestBuildArgs:
 
         assert args[:2] == ["codex", "exec"]
         assert "resume" in args
+        resume_index = args.index("resume")
+        assert args[resume_index + 1] == "rollout-123"
         dashdash = args.index("--")
-        assert args[dashdash - 1] == "resume"
-        assert args[dashdash + 1] == "rollout-123"
-        assert args[dashdash + 2] == "-"
+        assert dashdash > resume_index
+        assert args[dashdash + 1] == "-"
 
     def test_dangerously_skip_permissions_uses_bypass_flag(self, tmp_path: Path) -> None:
         runner = CodexRunner(dangerously_skip_permissions=True)
@@ -69,7 +70,7 @@ class TestBuildArgs:
         resume_index = args.index("resume")
         cd_index = args.index("--cd")
         assert cd_index < resume_index
-        assert args[resume_index + 1] == "--"
+        assert args[resume_index + 1] == "rollout-123"
 
 
 class TestRun:
