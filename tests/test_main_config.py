@@ -97,6 +97,7 @@ class TestLoadConfig:
                     "CLAUDE_ALLOWED_TOOLS": "Read,Write",
                     "CUSTOM_COGS_DIR": "/my/cogs",
                     "CLI_SESSIONS_PATH": "~/.claude/projects",
+                    "MENTION_ONLY_ALL_CHANNELS": "true",
                 },
                 clear=True,
             ),
@@ -114,6 +115,7 @@ class TestLoadConfig:
         assert config["allowed_tools"] == "Read,Write"
         assert config["custom_cogs_dir"] == "/my/cogs"
         assert config["cli_sessions_path"] == "~/.claude/projects"
+        assert config["mention_only_all_channels"] == "true"
 
     def test_cli_sessions_path_defaults_to_empty(self) -> None:
         """CLI_SESSIONS_PATH defaults to empty string when not set."""

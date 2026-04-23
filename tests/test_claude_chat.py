@@ -1608,6 +1608,8 @@ class TestMentionOnlyChannels:
         self,
         channel_ids: set[int],
         mention_only_channel_ids: set[int] | None = None,
+        monitor_all_channels: bool = False,
+        mention_only_all_channels: bool = False,
     ) -> ClaudeChatCog:
         bot = MagicMock()
         bot.channel_id = 999
@@ -1624,6 +1626,8 @@ class TestMentionOnlyChannels:
             runner=runner,
             channel_ids=channel_ids,
             mention_only_channel_ids=mention_only_channel_ids,
+            monitor_all_channels=monitor_all_channels,
+            mention_only_all_channels=mention_only_all_channels,
         )
 
     def _make_message(
@@ -1689,13 +1693,16 @@ class TestMentionOnlyChannels:
         cog._handle_new_conversation.assert_awaited_once_with(msg)
 
     @pytest.mark.asyncio
-    async def test_thread_under_mention_only_channel_bypasses_mention_check(self) -> None:
-        """Thread replies are always handled (already in an active session)."""
+    async def test_thread_under_mention_only_channel_allowed_with_session(self) -> None:
+        """Thread replies in mention-only channels proceed when a session exists."""
         cog = self._make_cog(
             channel_ids={111, 222},
             mention_only_channel_ids={222},
         )
         cog._handle_thread_reply = AsyncMock()
+        record = MagicMock()
+        record.session_id = "abc-123"
+        cog.repo.get = AsyncMock(return_value=record)
 
         msg = MagicMock(spec=discord.Message)
         msg.author = MagicMock()
@@ -1717,6 +1724,70 @@ class TestMentionOnlyChannels:
         """Without mention_only_channel_ids, the set is empty (all messages handled)."""
         cog = self._make_cog(channel_ids={111})
         assert cog._mention_only_channel_ids == set()
+
+    @pytest.mark.asyncio
+    async def test_mention_only_all_channels_requires_mention_in_monitor_all_mode(self) -> None:
+        """Monitor-all mode can require explicit @mention for any new channel."""
+        cog = self._make_cog(
+            channel_ids={111},
+            monitor_all_channels=True,
+            mention_only_all_channels=True,
+        )
+        cog._handle_new_conversation = AsyncMock()
+
+        msg = self._make_message(channel_id=333, mentions=[])
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mention_only_all_channels_with_mention_starts_session(self) -> None:
+        """When enabled, mentioning the bot starts a session in any monitored channel."""
+        cog = self._make_cog(
+            channel_ids={111},
+            monitor_all_channels=True,
+            mention_only_all_channels=True,
+        )
+        cog._handle_new_conversation = AsyncMock()
+
+        msg = self._make_message(channel_id=333, mentions=[cog.bot.user])
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_mention_only_all_channels_thread_requires_session_or_mention(self) -> None:
+        """Thread replies are gated until a mention or an existing session is present."""
+        cog = self._make_cog(
+            channel_ids={111},
+            monitor_all_channels=True,
+            mention_only_all_channels=True,
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = 42
+        msg.type = discord.MessageType.default
+        msg.mentions = []
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 55555
+        thread.parent_id = 333
+        msg.channel = thread
+        msg.content = "reply"
+        msg.attachments = []
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_not_awaited()
+
+        record = MagicMock()
+        record.session_id = "abc-123"
+        cog.repo.get = AsyncMock(return_value=record)
+
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_awaited_once_with(msg)
 
 
 class TestInlineReplyChannels:
