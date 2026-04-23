@@ -877,7 +877,13 @@ class ClaudeChatCog(commands.Cog):
             )
         else:
             thread_name = message.content[:100] if message.content else f"{backend.title()} Session"
-            thread = await message.create_thread(name=thread_name)
+            try:
+                thread = await message.create_thread(name=thread_name)
+            except discord.HTTPException as exc:
+                existing_thread = getattr(message, "thread", None)
+                if exc.code != 160004 or not isinstance(existing_thread, discord.Thread):
+                    raise
+                thread = existing_thread
             if self._auto_rename_threads and backend == "claude" and message.content:
                 asyncio.create_task(self._background_rename_thread(thread, message.content))
             await self._run_claude(
