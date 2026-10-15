@@ -75,6 +75,33 @@ def _attachment_marker_name(thread_id: int) -> str:
     return f"{_ATTACHMENT_MARKER_PREFIX}-{thread_id}"
 
 
+def _adopt_legacy_attachment_marker(working_dir: Path, marker: Path) -> None:
+    """Local customization: honour the v2 shared marker ``.ccdb-attachments``.
+
+    Skills, scheduled prompts and old thread histories still tell agents to
+    write there; v5 only reads the per-thread file. Move any legacy lines into
+    this thread's marker so those files are delivered instead of stranded.
+    """
+    legacy = working_dir / _ATTACHMENT_MARKER_PREFIX
+    try:
+        text = legacy.read_text(encoding="utf-8")
+    except (FileNotFoundError, IsADirectoryError):
+        return
+    except OSError:
+        logger.warning("Could not read legacy attachment marker %s", legacy, exc_info=True)
+        return
+    try:
+        legacy.unlink()
+    except FileNotFoundError:
+        return  # another turn adopted it first
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return
+    with marker.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    logger.info("Adopted %d legacy attachment request(s) from %s", len(lines), legacy)
+
+
 async def _send_attachment_requests(
     surface: ConversationSurface,
     working_dir: str | None,
@@ -91,6 +118,7 @@ async def _send_attachment_requests(
         logger.debug("_send_attachment_requests: no working_dir, skipping")
         return
     marker = Path(working_dir) / _attachment_marker_name(thread_id)
+    _adopt_legacy_attachment_marker(Path(working_dir), marker)
     if not marker.exists() and not marker.with_name(marker.name + ".pending").exists():
         logger.debug("_send_attachment_requests: %s not found, skipping", marker)
         return

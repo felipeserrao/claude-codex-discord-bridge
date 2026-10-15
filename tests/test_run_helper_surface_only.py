@@ -204,3 +204,21 @@ def test_pi_runner_isolated_args() -> None:
     assert "--no-context-files" in args and "--no-skills" in args and "--skill" not in args
     sd = args[args.index("--session-dir") + 1]
     assert sd.endswith("sessions-isolated") and "/.pi/agent/sessions/" not in sd + "/"
+
+
+# --- Local customization: legacy .ccdb-attachments marker ----------------------
+
+
+def test_legacy_attachment_marker_is_adopted(tmp_path) -> None:
+    from claude_discord.cogs.event_processor import (
+        _adopt_legacy_attachment_marker,
+        _attachment_marker_name,
+    )
+
+    (tmp_path / ".ccdb-attachments").write_text("/tmp/a.png\n\n/tmp/b.txt\n")
+    marker = tmp_path / _attachment_marker_name(42)
+    marker.write_text("/tmp/existing.pdf\n")
+    _adopt_legacy_attachment_marker(tmp_path, marker)
+    assert not (tmp_path / ".ccdb-attachments").exists()
+    assert marker.read_text().splitlines() == ["/tmp/existing.pdf", "/tmp/a.png", "/tmp/b.txt"]
+    _adopt_legacy_attachment_marker(tmp_path, marker)  # no legacy file: no-op
