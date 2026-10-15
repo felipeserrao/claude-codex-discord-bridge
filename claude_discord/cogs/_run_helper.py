@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 from dataclasses import replace
 from typing import TYPE_CHECKING
@@ -239,6 +240,19 @@ def _waiting_marker_hint() -> str:
     )
 
 
+#: Local customization: keep the AI Lounge out of the session prompt.
+#: ``all`` (or ``*``) turns it off for every backend; a comma-separated list
+#: (``pi,codex``) turns it off only for those. Unset/empty = lounge on.
+#: The lounge API and its stored notes are unaffected — only the injection.
+LOUNGE_PROMPT_OFF_ENV = "CCDB_LOUNGE_PROMPT_OFF"
+
+
+def _lounge_prompt_off(backend: str) -> bool:
+    raw = os.environ.get(LOUNGE_PROMPT_OFF_ENV, "")
+    names = {n.strip().lower() for n in raw.split(",") if n.strip()}
+    return bool(names & {"all", "*", backend.lower()})
+
+
 async def _build_system_context(config: RunConfig) -> str | None:
     """Build ephemeral system context from AI Lounge and concurrency notice.
 
@@ -250,7 +264,12 @@ async def _build_system_context(config: RunConfig) -> str | None:
     parts: list[str] = []
 
     # Layer 3: AI Lounge context (recent messages + invitation).
-    if config.lounge_repo is not None:
+    from .event_processor import _backend_name_from_runner
+
+    backend = _backend_name_from_runner(config.runner)
+    if config.lounge_repo is not None and _lounge_prompt_off(backend):
+        logger.debug("Lounge prompt off for backend %s (%s)", backend, LOUNGE_PROMPT_OFF_ENV)
+    elif config.lounge_repo is not None:
         try:
             recent = await config.lounge_repo.get_recent(limit=10)
             lounge_context = build_lounge_prompt(

@@ -125,3 +125,41 @@ async def test_delegation_guidance_preserves_preselected_child_ai() -> None:
     assert "parent_thread_id" in context
     assert "child AI preferences" in context
     assert "native subagents" in context
+
+
+# --- Local customization: CCDB_LOUNGE_PROMPT_OFF -------------------------------
+
+
+def _lounge_config(runner: MagicMock) -> tuple[RunConfig, MagicMock]:
+    lounge_repo = MagicMock()
+    lounge_repo.get_recent = AsyncMock(return_value=[])
+    config = RunConfig(surface=MemorySurface(), runner=runner, prompt="hi", lounge_repo=lounge_repo)
+    return config, lounge_repo
+
+
+class PiRunner(MagicMock):
+    """Class name is what _backend_name_from_runner keys on."""
+
+
+async def test_lounge_prompt_on_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("CCDB_LOUNGE_PROMPT_OFF", raising=False)
+    config, repo = _lounge_config(_runner())
+    assert "AI LOUNGE" in (await _build_system_context(config) or "")
+    repo.get_recent.assert_awaited_once()
+
+
+async def test_lounge_prompt_off_for_all(monkeypatch) -> None:
+    monkeypatch.setenv("CCDB_LOUNGE_PROMPT_OFF", "all")
+    config, repo = _lounge_config(_runner())
+    assert "AI LOUNGE" not in (await _build_system_context(config) or "")
+    repo.get_recent.assert_not_awaited()
+
+
+async def test_lounge_prompt_off_only_for_listed_backend(monkeypatch) -> None:
+    monkeypatch.setenv("CCDB_LOUNGE_PROMPT_OFF", "pi, codex")
+    pi_runner = PiRunner()
+    pi_runner.working_dir = "/tmp/example"
+    pi_config, _ = _lounge_config(pi_runner)
+    claude_config, _ = _lounge_config(_runner())
+    assert "AI LOUNGE" not in (await _build_system_context(pi_config) or "")
+    assert "AI LOUNGE" in (await _build_system_context(claude_config) or "")
