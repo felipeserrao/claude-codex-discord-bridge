@@ -561,6 +561,40 @@ class BackendCommandCog(commands.Cog):
     # ── /engine-status ─────────────────────────────────────────────
 
     @app_commands.command(
+        name="pi-isolate",
+        description="Run pi with nothing loaded up front (no CLAUDE.md, skills, lounge)",
+    )
+    @app_commands.choices(
+        mode=[Choice(name="on", value="on"), Choice(name="off", value="off")],
+    )
+    @app_commands.describe(
+        mode="on: every pi thread runs isolated from its next turn; off: normal. Omit to show."
+    )
+    async def pi_isolate_command(
+        self, interaction: discord.Interaction, mode: str | None = None
+    ) -> None:
+        """Local customization: global switch for isolated pi sessions."""
+        if await self._refuse_unauthorized(interaction):
+            return
+        if mode is None:
+            state = "on" if await self._settings.pi_isolated() else "off"
+            await interaction.response.send_message(
+                f"🧪 pi isolated mode is **{state}** (applies to every pi thread).",
+                ephemeral=True,
+            )
+            return
+        await self._settings.set_pi_isolated(mode == "on")
+        note = (
+            "pi now loads no CLAUDE.md, skills, lounge or bridge notes — only file delivery."
+            if mode == "on"
+            else "pi loads its normal context again."
+        )
+        await interaction.response.send_message(
+            f"🧪 pi isolated mode **{mode}** from the next turn, in every pi thread. {note}",
+            ephemeral=False,
+        )
+
+    @app_commands.command(
         name="engine-status",
         description="Show/set whether the Codex usage line appears after each turn",
     )

@@ -114,6 +114,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "model": "🤖 Model",
     "backend": "🤖 Model",
     "engine-status": "🤖 Model",
+    "pi-isolate": "🤖 Model",
     "ollama": "🤖 Model",  # manage the runtime behind the `local` backend
     "sandbox": "🤖 Model",  # where the agent runs (execution environment)
     "ask": "🤖 Model",  # one anonymized question to an external model

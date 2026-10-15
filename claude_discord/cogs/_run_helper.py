@@ -253,7 +253,50 @@ def _lounge_prompt_off(backend: str) -> bool:
     return bool(names & {"all", "*", backend.lower()})
 
 
-async def _build_system_context(config: RunConfig) -> str | None:
+def _file_delivery_section(config: RunConfig) -> str:
+    """The "## File Delivery" instructions (also all an isolated pi run gets)."""
+    # File delivery marker: always injected so Claude knows the per-thread
+    # marker name, even when it discovers the mechanism from session history
+    # or CLAUDE.md rather than from an explicit "send me the file" request.
+    from .event_processor import _attachment_marker_name
+
+    wd = config.runner.working_dir or "your current working directory"
+    marker = _attachment_marker_name(config.surface.thread_key)
+    where = _platform_label(config.surface.frontend)
+    return (
+        "## File Delivery\n"
+        f"{where} cannot open local filesystem paths. Never describe a local path as a "
+        "clickable link, and never use a local path or file:// URI as a user-facing Markdown "
+        "link. For every file the user asks to view, open, download, or receive, deliver it as "
+        f"a real {where} attachment using the marker below and refer to it as an attached file "
+        f"in the final response. This {where}-specific rule overrides general instructions to "
+        "prefer clickable local-file links.\n"
+        f"When you need to send files to {where}, use your Bash tool to append "
+        "each file's ABSOLUTE path (one path per line, UTF-8) to:\n"
+        f"  {wd}/{marker}\n"
+        f"Example: `echo /absolute/path/to/file >> {wd}/{marker}`\n"
+        "The bot will attach those files when this session ends.\n"
+        "When local instructions require Discord attachment for a substantial "
+        "written deliverable, save the final text as a Markdown file and append "
+        "that file path here. Otherwise, only include files the user explicitly "
+        "asked to receive."
+    )
+
+
+async def _pi_isolated(config: RunConfig) -> bool:
+    """Local customization: is this a pi run with /pi-isolate switched on?"""
+    from .event_processor import _backend_name_from_runner
+
+    if config.backend_settings is None or _backend_name_from_runner(config.runner) != "pi":
+        return False
+    try:
+        return await config.backend_settings.pi_isolated()
+    except Exception:
+        logger.warning("Could not read the pi-isolated switch — running normally", exc_info=True)
+        return False
+
+
+async def _build_system_context(config: RunConfig, *, pi_isolated: bool = False) -> str | None:
     """Build ephemeral system context from AI Lounge and concurrency notice.
 
     Returns a string to inject as backend-specific developer/system instructions, or
@@ -262,6 +305,10 @@ async def _build_system_context(config: RunConfig) -> str | None:
     cause "Prompt is too long" errors over long conversations.
     """
     parts: list[str] = []
+
+    if pi_isolated:
+        # /pi-isolate: nothing but what a Discord reply needs (file delivery).
+        return _file_delivery_section(config)
 
     # Layer 3: AI Lounge context (recent messages + invitation).
     from .event_processor import _backend_name_from_runner
@@ -300,32 +347,7 @@ async def _build_system_context(config: RunConfig) -> str | None:
             config.surface.thread_key,
         )
 
-    # File delivery marker: always injected so Claude knows the per-thread
-    # marker name, even when it discovers the mechanism from session history
-    # or CLAUDE.md rather than from an explicit "send me the file" request.
-    from .event_processor import _attachment_marker_name
-
-    wd = config.runner.working_dir or "your current working directory"
-    marker = _attachment_marker_name(config.surface.thread_key)
-    where = _platform_label(config.surface.frontend)
-    parts.append(
-        "## File Delivery\n"
-        f"{where} cannot open local filesystem paths. Never describe a local path as a "
-        "clickable link, and never use a local path or file:// URI as a user-facing Markdown "
-        "link. For every file the user asks to view, open, download, or receive, deliver it as "
-        f"a real {where} attachment using the marker below and refer to it as an attached file "
-        f"in the final response. This {where}-specific rule overrides general instructions to "
-        "prefer clickable local-file links.\n"
-        f"When you need to send files to {where}, use your Bash tool to append "
-        "each file's ABSOLUTE path (one path per line, UTF-8) to:\n"
-        f"  {wd}/{marker}\n"
-        f"Example: `echo /absolute/path/to/file >> {wd}/{marker}`\n"
-        "The bot will attach those files when this session ends.\n"
-        "When local instructions require Discord attachment for a substantial "
-        "written deliverable, save the final text as a Markdown file and append "
-        "that file path here. Otherwise, only include files the user explicitly "
-        "asked to receive."
-    )
+    parts.append(_file_delivery_section(config))
 
     parts.append(
         "## Ebi AI Console thread links\n"
@@ -559,12 +581,17 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     Returns:
         The final session_id, or None if the run failed.
     """
-    system_context = await _build_system_context(config)
+    pi_isolated = await _pi_isolated(config)
+    system_context = await _build_system_context(config, pi_isolated=pi_isolated)
     runner = (
         config.runner.clone(append_system_prompt=system_context)
         if system_context
         else config.runner
     )
+    if pi_isolated:
+        # Always a fresh clone here (file delivery is always present), so the
+        # flag never leaks onto the shared config.runner.
+        runner.isolated = True
     # Inject per-invocation images (not inherited by runner.clone()).
     if config.images:
         runner.images = config.images

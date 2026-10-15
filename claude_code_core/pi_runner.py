@@ -234,6 +234,9 @@ def parse_pi_line(line: str) -> StreamEvent | None:
 class PiRunner:
     """Manages a ``pi --mode json`` subprocess."""
 
+    #: Local customization: set per run by the bridge when /pi-isolate is on.
+    isolated: bool = False
+
     # Execution environment (claude_code_core.execution). ``None`` = deployment
     # default; ``execution_served`` records which one ran the last spawn.
     execution_mode: str | None = None
@@ -456,7 +459,10 @@ class PiRunner:
         if self.append_system_prompt:
             args.extend(["--append-system-prompt", self.append_system_prompt])
 
-        if _claude_plugin_skills_enabled():
+        if self.isolated:
+            # Local customization (/pi-isolate): load nothing up front.
+            args.extend(["--no-context-files", "--no-skills"])
+        elif _claude_plugin_skills_enabled():
             for skills_dir in plugin_skill_dirs(user_scope_only=True, enabled_only=True):
                 args.extend(["--skill", str(skills_dir)])
 

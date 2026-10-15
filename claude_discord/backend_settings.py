@@ -37,6 +37,9 @@ CODEX_STATUS_GLOBAL = "status.codex.global"
 CODEX_STATUS_THREAD_PREFIX = "status.codex.thread."  # + thread_id
 CODEX_STATUS_MODES = ("auto", "on", "off")
 CODEX_STATUS_DEFAULT = "auto"
+#: Local customization: one global switch, read every turn, that runs pi with
+#: nothing loaded up front (no context files, skills or bridge sections).
+PI_ISOLATED_GLOBAL = "pi.isolated.global"
 
 
 def session_is_resumable(stored_backend: str | None, current_backend: str) -> bool:
@@ -189,6 +192,14 @@ class BackendSettings:
         return CODEX_STATUS_DEFAULT
 
     # ── Mutation ────────────────────────────────────────────
+
+    async def pi_isolated(self) -> bool:
+        """Whether pi sessions run isolated (global switch, read every turn)."""
+        return (await self.repo.get(PI_ISOLATED_GLOBAL)) == "on"
+
+    async def set_pi_isolated(self, on: bool) -> None:
+        await self.repo.set(PI_ISOLATED_GLOBAL, "on" if on else "off")
+        logger.info("pi isolated set: global -> %s", "on" if on else "off")
 
     async def set_codex_status_mode(self, mode: str, *, thread_id: int | None = None) -> None:
         if mode not in CODEX_STATUS_MODES:

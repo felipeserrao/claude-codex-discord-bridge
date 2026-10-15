@@ -163,3 +163,42 @@ async def test_lounge_prompt_off_only_for_listed_backend(monkeypatch) -> None:
     claude_config, _ = _lounge_config(_runner())
     assert "AI LOUNGE" not in (await _build_system_context(pi_config) or "")
     assert "AI LOUNGE" in (await _build_system_context(claude_config) or "")
+
+
+# --- Local customization: /pi-isolate --------------------------------------------
+
+
+async def test_pi_isolated_context_is_file_delivery_only(monkeypatch) -> None:
+    monkeypatch.delenv("CCDB_LOUNGE_PROMPT_OFF", raising=False)
+    config, repo = _lounge_config(_runner())
+    context = await _build_system_context(config, pi_isolated=True)
+    assert context.startswith("## File Delivery")
+    assert "AI LOUNGE" not in context and "CONCURRENCY" not in context
+    repo.get_recent.assert_not_awaited()
+
+
+async def test_pi_isolated_reads_switch_only_for_pi() -> None:
+    from claude_discord.cogs._run_helper import _pi_isolated
+
+    settings = MagicMock()
+    settings.pi_isolated = AsyncMock(return_value=True)
+    pi_runner = PiRunner()
+    pi_runner.working_dir = "/tmp/example"
+    pi_cfg = RunConfig(
+        surface=MemorySurface(), runner=pi_runner, prompt="x", backend_settings=settings
+    )
+    claude_cfg = RunConfig(
+        surface=MemorySurface(), runner=_runner(), prompt="x", backend_settings=settings
+    )
+    assert await _pi_isolated(pi_cfg) is True
+    assert await _pi_isolated(claude_cfg) is False
+
+
+def test_pi_runner_isolated_args() -> None:
+    from claude_code_core.pi_runner import PiRunner as RealPiRunner
+
+    runner = RealPiRunner(command="pi", model="openrouter/x")
+    assert "--no-context-files" not in runner._build_args(None)
+    runner.isolated = True
+    args = runner._build_args(None)
+    assert "--no-context-files" in args and "--no-skills" in args and "--skill" not in args
