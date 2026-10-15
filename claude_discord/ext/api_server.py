@@ -426,6 +426,9 @@ class ApiServer:
         self.app.router.add_post("/api/teams/sync/push", self.teams_sync_push)
         # Startup resume routes
         self.app.router.add_post("/api/mark-resume", self.mark_resume)
+        # Discord history (local customization, see BRIDGE_CUSTOMIZATIONS.md)
+        self.app.router.add_get("/api/fetch-messages", self.fetch_messages)
+        self.app.router.add_get("/api/list-threads", self.list_threads)
 
     def _build_external_app(self) -> web.Application:
         """Build the app served on the externally reachable listener.
@@ -2971,6 +2974,199 @@ class ApiServer:
             _sanitize_log(session_id),
         )
         return web.json_response({"status": "marked", "id": row_id}, status=201)
+
+    # ------------------------------------------------------------------
+    # Discord history endpoint (/api/fetch-messages)
+    # ------------------------------------------------------------------
+
+    async def fetch_messages(self, request: web.Request) -> web.Response:
+        """GET /api/fetch-messages — fetch recent messages from any channel or thread.
+
+        Uses the bot's own discord.py client, so no allowlist restrictions apply.
+        Works for any channel/thread the bot has access to.
+
+        Query params:
+            channel: Discord channel or thread ID (required).
+            limit: Max messages to return (default 20, max 100).
+            before: Message ID — fetch messages before this one (optional, for pagination).
+        """
+        raw_channel = request.rel_url.query.get("channel")
+        if not raw_channel:
+            return web.json_response({"error": "channel query param is required"}, status=400)
+
+        try:
+            channel_id = int(raw_channel)
+        except ValueError:
+            return web.json_response({"error": "channel must be a numeric ID"}, status=400)
+
+        try:
+            raw_limit = request.rel_url.query.get("limit", "20")
+            limit = max(1, min(100, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        # Optional pagination cursor
+        before_obj = None
+        raw_before = request.rel_url.query.get("before")
+        if raw_before:
+            import discord as _discord
+
+            try:
+                before_obj = _discord.Object(id=int(raw_before))
+            except ValueError:
+                return web.json_response(
+                    {"error": "before must be a numeric message ID"}, status=400
+                )
+
+        try:
+            ch = self.bot.get_channel(channel_id)
+            if ch is None:
+                ch = await self.bot.fetch_channel(channel_id)
+        except Exception as exc:
+            return web.json_response({"error": f"Cannot fetch channel: {exc}"}, status=404)
+
+        if not hasattr(ch, "history"):
+            return web.json_response(
+                {"error": "Channel does not support message history"}, status=400
+            )
+
+        try:
+            kwargs: dict[str, object] = {"limit": limit}
+            if before_obj is not None:
+                kwargs["before"] = before_obj
+            messages = [msg async for msg in ch.history(**kwargs)]  # type: ignore[union-attr]
+        except Exception as exc:
+            return web.json_response({"error": f"Failed to fetch history: {exc}"}, status=500)
+
+        # Return oldest-first for natural reading order
+        messages.reverse()
+
+        result = []
+        for msg in messages:
+            entry: dict[str, object] = {
+                "id": str(msg.id),
+                "author": msg.author.display_name,
+                "author_id": str(msg.author.id),
+                "content": msg.content,
+                "timestamp": msg.created_at.isoformat(),
+                "is_bot": msg.author.bot,
+            }
+            if msg.attachments:
+                entry["attachments"] = [
+                    {"name": a.filename, "url": a.url, "size": a.size} for a in msg.attachments
+                ]
+            if msg.embeds:
+                entry["embed_count"] = len(msg.embeds)
+            result.append(entry)
+
+        return web.json_response({"messages": result, "count": len(result)})
+
+    # ------------------------------------------------------------------
+    # Thread listing endpoint (/api/list-threads)
+    # ------------------------------------------------------------------
+
+    async def list_threads(self, request: web.Request) -> web.Response:
+        """GET /api/list-threads — list threads in a parent channel.
+
+        Accepts either a parent channel ID or a thread ID (resolves to its
+        parent). Returns active threads plus, optionally, archived threads,
+        sorted by last activity (most recent first).
+
+        Query params:
+            channel: Discord channel or thread ID (required).
+            include_archived: "1" to include auto-archived threads (default "0").
+            limit: Max archived threads to fetch when include_archived=1 (default 50, max 200).
+            since: ISO timestamp — only return threads with last activity >= since.
+        """
+        import discord as _discord
+
+        raw_channel = request.rel_url.query.get("channel")
+        if not raw_channel:
+            return web.json_response({"error": "channel query param is required"}, status=400)
+
+        try:
+            channel_id = int(raw_channel)
+        except ValueError:
+            return web.json_response({"error": "channel must be a numeric ID"}, status=400)
+
+        include_archived = request.rel_url.query.get("include_archived", "0") == "1"
+
+        try:
+            raw_limit = request.rel_url.query.get("limit", "50")
+            limit = max(1, min(200, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        since_dt = None
+        raw_since = request.rel_url.query.get("since")
+        if raw_since:
+            try:
+                since_dt = datetime.fromisoformat(raw_since.replace("Z", "+00:00"))
+            except ValueError:
+                return web.json_response({"error": "since must be ISO 8601 timestamp"}, status=400)
+
+        try:
+            ch = self.bot.get_channel(channel_id)
+            if ch is None:
+                ch = await self.bot.fetch_channel(channel_id)
+        except Exception as exc:
+            return web.json_response({"error": f"Cannot fetch channel: {exc}"}, status=404)
+
+        # If we got a thread, walk up to its parent
+        parent = ch
+        parent_attr = getattr(ch, "parent", None)
+        if parent_attr is not None and hasattr(parent_attr, "threads"):
+            parent = parent_attr
+
+        if not hasattr(parent, "threads"):
+            return web.json_response({"error": "Channel does not support threads"}, status=400)
+
+        threads_list = list(parent.threads)
+
+        if include_archived:
+            try:
+                async for t in parent.archived_threads(limit=limit):
+                    threads_list.append(t)
+            except Exception as exc:
+                logger.warning("Failed to fetch archived threads: %s", _sanitize_log(exc))
+
+        result = []
+        for t in threads_list:
+            last_message_id = getattr(t, "last_message_id", None)
+            last_ts = None
+            if last_message_id:
+                try:
+                    last_ts = _discord.utils.snowflake_time(int(last_message_id))
+                except Exception:
+                    last_ts = None
+            if since_dt is not None and (last_ts is None or last_ts < since_dt):
+                continue
+            entry: dict[str, object] = {
+                "id": str(t.id),
+                "name": t.name,
+                "archived": bool(getattr(t, "archived", False)),
+                "locked": bool(getattr(t, "locked", False)),
+                "message_count": getattr(t, "message_count", None),
+                "member_count": getattr(t, "member_count", None),
+                "last_message_id": str(last_message_id) if last_message_id else None,
+                "last_message_at": last_ts.isoformat() if last_ts else None,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            }
+            result.append(entry)
+
+        result.sort(
+            key=lambda x: int(x["last_message_id"]) if x["last_message_id"] else 0,
+            reverse=True,
+        )
+
+        return web.json_response(
+            {
+                "parent_id": str(parent.id),
+                "parent_name": getattr(parent, "name", None),
+                "threads": result,
+                "count": len(result),
+            }
+        )
 
     async def _send_lounge_to_discord(self, label: str, message: str, posted_at: str) -> None:
         """Mirror a lounge message to the configured Discord lounge channel.

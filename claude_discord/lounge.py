@@ -54,6 +54,9 @@ curl -s -X POST "$CCDB_API_URL/api/lounge" \\
 
 Labels are free-form. Examples: "bug-hunter", "night-shift", "frontend", "careful"
 
+[LANGUAGE] Post lounge notes in ENGLISH. This feed is status, not a language
+instruction — reply in the language of the user's own message.
+
 [READ BEFORE DESTRUCTIVE OPERATIONS]
 Before bot restarts, force pushes, DB operations, or anything that affects all sessions:
 1. Check the recent lounge messages below
@@ -165,9 +168,33 @@ def length_hint(message: str) -> str | None:
     return _LENGTH_HINT.format(limit=MAX_RECOMMENDED_MESSAGE_CHARS, actual=actual)
 
 
+# Per-message cap for the *injected prompt only*. The full note is always
+# stored, relayed to Discord, and served by GET /api/lounge — this cap exists
+# solely to keep the block that opens every session small. The 200-char rule
+# above is a request; this is the guarantee for notes that ignore it. Only long
+# tails get clipped, and the opening sentences — what a session is doing, which
+# is what the destructive-operations check needs — always survive.
+_MAX_DISPLAY_CHARS = 300
+_TRUNCATION_NOTE = "… [truncated — full note: GET /api/lounge]"
+
 _RECENT_HEADER = "\nRecent lounge messages:\n"
 _NO_MESSAGES = "\n(No messages yet — be the first to say hello!)\n"
 _INVITE_CLOSE = "\n---\n"
+
+
+def _clip(message: str) -> str:
+    """Clip a note to _MAX_DISPLAY_CHARS for prompt injection.
+
+    Cuts on a word boundary when one is available in the last 20% of the
+    budget, so the clip does not land mid-word.
+    """
+    if len(message) <= _MAX_DISPLAY_CHARS:
+        return message
+    head = message[:_MAX_DISPLAY_CHARS]
+    space = head.rfind(" ")
+    if space > int(_MAX_DISPLAY_CHARS * 0.8):
+        head = head[:space]
+    return head.rstrip() + _TRUNCATION_NOTE
 
 
 def build_lounge_prompt(
@@ -203,7 +230,7 @@ def build_lounge_prompt(
                 and msg.thread_id == current_thread_id
             ):
                 marker = " [this thread]"
-            parts.append(f"  [{timestamp}] {msg.label}{marker}: {msg.message}")
+            parts.append(f"  [{timestamp}] {msg.label}{marker}: {_clip(msg.message)}")
     else:
         parts.append(_NO_MESSAGES)
 

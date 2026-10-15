@@ -169,12 +169,6 @@ class TestLoungeRepository:
         msg = await lounge_repo.post("hi", label=long_label)
         assert len(msg.label) <= 50
 
-    async def test_message_safety_cap(self, lounge_repo: LoungeRepository) -> None:
-        """Messages longer than 1000 chars are truncated."""
-        long_msg = "A" * 2000
-        msg = await lounge_repo.post(long_msg, label="Bot")
-        assert len(msg.message) <= 1000
-
     async def test_default_label(self, lounge_repo: LoungeRepository) -> None:
         msg = await lounge_repo.post("no label given")
         assert msg.label == "AI"
@@ -632,3 +626,55 @@ class TestLengthHint:
         assert hint is not None
         assert str(MAX_RECOMMENDED_MESSAGE_CHARS) in hint
         assert str(len(message)) in hint
+
+
+class TestLocalStorageAndClipping:
+    """Local customization: store long notes whole, clip only the injected prompt."""
+
+    async def test_message_safety_cap(self, lounge_repo: LoungeRepository) -> None:
+        from claude_code_core.lounge_repo import _MAX_MESSAGE_CHARS
+
+        msg = await lounge_repo.post("A" * (_MAX_MESSAGE_CHARS + 1000), label="Bot")
+        assert len(msg.message) <= _MAX_MESSAGE_CHARS
+
+    async def test_long_note_survives_storage(self, lounge_repo: LoungeRepository) -> None:
+        note = "B" * 2000
+        msg = await lounge_repo.post(note, label="Bot")
+        assert msg.message == note
+
+    def test_short_note_untouched(self) -> None:
+        from claude_discord.lounge import _clip
+
+        note = "Investigating a bug in the parser. Read-only for now."
+        assert _clip(note) == note
+
+    def test_long_note_clipped_and_marked(self) -> None:
+        from claude_discord.lounge import _MAX_DISPLAY_CHARS, _TRUNCATION_NOTE, _clip
+
+        clipped = _clip("word " * 400)
+        assert clipped.endswith(_TRUNCATION_NOTE)
+        assert len(clipped) <= _MAX_DISPLAY_CHARS + len(_TRUNCATION_NOTE)
+
+    def test_clip_does_not_split_a_word(self) -> None:
+        from claude_discord.lounge import _TRUNCATION_NOTE, _clip
+
+        body = _clip("alpha " * 200).replace(_TRUNCATION_NOTE, "")
+        assert body.rstrip().endswith("alpha")
+
+    def test_full_note_kept_out_of_prompt(self) -> None:
+        from claude_discord.lounge import build_lounge_prompt
+
+        long_note = "x" * 2000
+        msg = LoungeMessage(
+            id=1,
+            label="bot",
+            message=long_note,
+            thread_id=None,
+            posted_at="2026-09-01 22:00:00",
+        )
+        assert long_note not in build_lounge_prompt([msg])
+
+    def test_language_rule_in_invite(self) -> None:
+        from claude_discord.lounge import build_lounge_prompt
+
+        assert "[LANGUAGE] Post lounge notes in ENGLISH" in build_lounge_prompt([])

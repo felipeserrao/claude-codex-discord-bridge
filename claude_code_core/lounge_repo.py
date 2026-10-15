@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 # Keep at most this many recent messages to prevent unbounded growth.
 _MAX_STORED_MESSAGES = 200
 
+# Generous storage bound. The prompt-side cap is lounge._MAX_DISPLAY_CHARS.
+_MAX_MESSAGE_CHARS = 5000
+
 
 @dataclass
 class LoungeMessage:
@@ -50,7 +53,10 @@ class LoungeRepository:
         Prunes messages exceeding _MAX_STORED_MESSAGES after insert.
         """
         label = (label or "AI")[:50]  # safety cap
-        message = (message or "")[:1000]  # safety cap
+        # Generous safety bound only. The prompt-side cap lives in
+        # claude_discord/lounge.py (_MAX_DISPLAY_CHARS) so Discord and
+        # /api/lounge keep the full note — truncating here would destroy it.
+        message = (message or "")[:_MAX_MESSAGE_CHARS]
 
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row

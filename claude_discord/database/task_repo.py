@@ -251,11 +251,15 @@ class TaskRepository:
         )
         return row_id
 
-    async def update_next_run(self, task_id: int, interval_seconds: int) -> None:
-        """Advance next_run_at and record last_run_at.
+    async def update_next_run(self, task_id: int, interval_seconds: int) -> float:
+        """Advance next_run_at and record last_run_at, returning the new stamp.
 
         When the task has anchor_hour set, snaps to the next wall-clock
         occurrence instead of using ``now + interval_seconds``.
+
+        The returned value is the caller's proof of what it wrote: pass it to
+        ``set_enabled_if_unchanged`` after the run to disable a one-shot task
+        only if nobody re-armed it in the meantime.
         """
         now = time.time()
         # Check if this task has an anchor
@@ -279,6 +283,7 @@ class TaskRepository:
                 (next_run, now, task_id),
             )
             await db.commit()
+        return next_run
 
     async def delete_by_name(self, name: str) -> bool:
         """Delete a task by its unique name. Returns True if a row was deleted."""
@@ -291,6 +296,27 @@ class TaskRepository:
         """Delete a task. Returns True if a row was deleted."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def set_enabled_if_unchanged(self, task_id: int, next_run_at: float) -> bool:
+        """Disable a task only if ``next_run_at`` still holds the given stamp.
+
+        A one-shot follow-up task is re-armed by writing a fresh ``next_run_at``
+        (see the PATCH route).  When that happens *while the task's own run is
+        still in flight*, the master loop skips the task as already running and
+        the finishing run used to disable it unconditionally — stranding the
+        re-arm: enabled=0 with a due next_run_at, which ``get_due`` never
+        returns.  Guarding the disable on the stamp the dispatcher wrote makes
+        the clobber a no-op, so the loop picks the task up on its next tick.
+
+        Returns True if the task was disabled, False if it had been re-armed.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE scheduled_tasks SET enabled = 0 WHERE id = ? AND next_run_at = ?",
+                (task_id, next_run_at),
+            )
             await db.commit()
             return cursor.rowcount > 0
 

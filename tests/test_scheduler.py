@@ -401,6 +401,55 @@ class TestSchedulerCogFollowUp:
         assert updated is not None
         assert updated["enabled"] is False
 
+    async def test_one_shot_rearmed_mid_run_stays_enabled(self, repo: TaskRepository) -> None:
+        """Local customization: a one-shot re-armed while its own run is in flight survives.
+
+        The tutor-page stall: an answer posted mid-turn PATCHes a fresh
+        next_run_at onto the wake task, the master loop skips it as already
+        running, and the finishing run used to disable it.
+        """
+        import discord
+
+        task_id = await repo.create(
+            name="wake",
+            prompt="First answer",
+            interval_seconds=86400,
+            channel_id=99,
+            one_shot=True,
+        )
+        task = await repo.get(task_id)
+        stamp = await repo.update_next_run(task_id, interval_seconds=86400)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_starter = AsyncMock()
+        mock_starter.create_thread = AsyncMock(return_value=mock_thread)
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(return_value=mock_starter)
+
+        bot = _make_bot()
+        bot.get_channel = MagicMock(return_value=mock_channel)
+
+        cog = SchedulerCog(bot, _make_runner(), repo=repo)
+
+        async def _rearm(_config: object) -> None:
+            await repo.set_enabled(task_id, enabled=True)
+            await repo._db_execute(
+                "UPDATE scheduled_tasks SET next_run_at = ? WHERE id = ?",
+                (time.time(), task_id),
+            )
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config",
+            new_callable=AsyncMock,
+            side_effect=_rearm,
+        ):
+            await cog._run_task(task, dispatch_stamp=stamp)
+
+        updated = await repo.get(task_id)
+        assert updated is not None
+        assert updated["enabled"] is True, "re-arm was clobbered by the finishing run"
+        assert updated["next_run_at"] <= time.time(), "re-armed task must be due"
+
     async def test_recurring_task_not_disabled_after_run(self, repo: TaskRepository) -> None:
         """Regular tasks (one_shot=False) should remain enabled after execution."""
         import discord

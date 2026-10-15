@@ -41,7 +41,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # How often the master loop wakes up to check for due tasks.
-MASTER_LOOP_INTERVAL_SECONDS = 30
+#
+# This is not only a cron granularity. It is also the doorbell for the tutor
+# page: an answer POSTed to tutor-session-server re-arms that session's
+# one-shot wake task and then waits for a pass of this loop, so the interval is
+# dead air on EVERY turn, uniformly 0..N seconds. Measured over 8 questions on
+# 2026-09-05 at N=30: median 25s of wake latency against a median 34s of actual
+# Claude turn — i.e. roughly 40% of the wait was this sleep.
+#
+# 5s costs one indexed SELECT per tick on a table with a handful of rows.
+MASTER_LOOP_INTERVAL_SECONDS = 5
 
 
 class SchedulerCog(commands.Cog):
@@ -108,14 +117,18 @@ class SchedulerCog(commands.Cog):
                 continue
 
             # Advance next_run_at *before* spawning to prevent duplicate runs
-            # if the loop fires again before the task finishes.
-            await self.repo.update_next_run(task_id, interval_seconds=task["interval_seconds"])
+            # if the loop fires again before the task finishes.  The stamp we
+            # write is handed to the run so a one-shot disable can tell "my own
+            # schedule" from "someone re-armed me while I was working".
+            stamp = await self.repo.update_next_run(
+                task_id, interval_seconds=task["interval_seconds"]
+            )
 
             # Claimed here, not only inside _run_task, so the reconcile below
             # already sees a fired one-shot as no longer waiting.
             self._running.add(task_id)
             asyncio.create_task(
-                self._run_task(task),
+                self._run_task(task, dispatch_stamp=stamp),
                 name=f"ccdb-scheduler-{task_id}",
             )
 
@@ -163,14 +176,17 @@ class SchedulerCog(commands.Cog):
     async def _before_master_loop(self) -> None:
         await self.bot.wait_until_ready()
 
-    async def _run_task(self, task: dict) -> None:
+    async def _run_task(self, task: dict, *, dispatch_stamp: float | None = None) -> None:
         """Execute a single scheduled task in a Discord thread.
 
         When ``thread_id`` is set, posts into that existing thread (follow-up
         mode) and optionally resumes the previous session.  Otherwise, creates
         a new thread in the parent channel (original behavior).
 
-        When ``one_shot`` is True, the task is disabled after execution.
+        When ``one_shot`` is True, the task is disabled after execution — but
+        only if ``dispatch_stamp`` still matches the row's ``next_run_at``.  A
+        follow-up task re-armed mid-run has a newer stamp and must stay enabled
+        so the master loop runs it again for the input that re-armed it.
         """
         task_id: int = task["id"]
         self._running.add(task_id)
@@ -232,10 +248,25 @@ class SchedulerCog(commands.Cog):
                 )
             )
 
-            # One-shot tasks auto-disable after execution
+            # One-shot tasks auto-disable after execution — unless they were
+            # re-armed while this run was in flight, in which case the pending
+            # re-arm owns the row and the loop will run it again.
             if task.get("one_shot"):
-                await self.repo.set_enabled(task_id, enabled=False)
-                logger.info("SchedulerCog: one-shot task %d (%s) disabled", task_id, task["name"])
+                if dispatch_stamp is None:
+                    await self.repo.set_enabled(task_id, enabled=False)
+                    disabled = True
+                else:
+                    disabled = await self.repo.set_enabled_if_unchanged(task_id, dispatch_stamp)
+                if disabled:
+                    logger.info(
+                        "SchedulerCog: one-shot task %d (%s) disabled", task_id, task["name"]
+                    )
+                else:
+                    logger.info(
+                        "SchedulerCog: one-shot task %d (%s) re-armed mid-run — left enabled",
+                        task_id,
+                        task["name"],
+                    )
 
         except Exception:
             logger.exception("SchedulerCog: task %d (%s) failed", task_id, task["name"])
