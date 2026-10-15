@@ -231,6 +231,16 @@ def parse_pi_line(line: str) -> StreamEvent | None:
     return None
 
 
+#: Local customization: where /pi-isolate sessions are stored (never exported).
+PI_ISOLATED_SESSION_DIR_ENV = "CCDB_PI_ISOLATED_SESSION_DIR"
+
+
+def isolated_session_dir() -> str:
+    return os.environ.get(PI_ISOLATED_SESSION_DIR_ENV) or os.path.join(
+        os.path.expanduser("~"), ".pi", "agent", "sessions-isolated"
+    )
+
+
 class PiRunner:
     """Manages a ``pi --mode json`` subprocess."""
 
@@ -460,8 +470,11 @@ class PiRunner:
             args.extend(["--append-system-prompt", self.append_system_prompt])
 
         if self.isolated:
-            # Local customization (/pi-isolate): load nothing up front.
+            # Local customization (/pi-isolate): load nothing up front, and keep
+            # the session in its own directory so the vault exporter (which
+            # reads ~/.pi/agent/sessions only) never picks it up.
             args.extend(["--no-context-files", "--no-skills"])
+            args.extend(["--session-dir", isolated_session_dir()])
         elif _claude_plugin_skills_enabled():
             for skills_dir in plugin_skill_dirs(user_scope_only=True, enabled_only=True):
                 args.extend(["--skill", str(skills_dir)])

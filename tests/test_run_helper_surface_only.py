@@ -202,3 +202,5 @@ def test_pi_runner_isolated_args() -> None:
     runner.isolated = True
     args = runner._build_args(None)
     assert "--no-context-files" in args and "--no-skills" in args and "--skill" not in args
+    sd = args[args.index("--session-dir") + 1]
+    assert sd.endswith("sessions-isolated") and "/.pi/agent/sessions/" not in sd + "/"
